@@ -1,0 +1,2 @@
+[console_scripts]
+aeh = aeh.cli:main

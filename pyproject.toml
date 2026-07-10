@@ -1,0 +1,32 @@
+[project]
+name = "agent-eval-harness"
+version = "0.1.0"
+description = "Minimal agent evaluation harness with true hidden-check separation: seed repo + public tests to the agent, pristine hidden tests only at grading time."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Orazio Oztas" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5"]
+
+[project.scripts]
+aeh = "aeh.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.coverage.run]
+source = ["src/aeh"]

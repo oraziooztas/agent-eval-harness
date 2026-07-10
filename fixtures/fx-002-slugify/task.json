@@ -1,0 +1,8 @@
+{
+  "id": "fx-002-slugify",
+  "title": "Slugify robusto per URL",
+  "prompt": "La funzione `slugify(text)` in `slugify.py` deve produrre slug URL-safe: solo [a-z0-9] e trattini singoli, niente trattini in testa/coda, accenti traslitterati in ASCII (es. 'Città' → 'citta'), qualsiasi sequenza di caratteri non alfanumerici collassata in UN solo trattino, stringa vuota → stringa vuota. L'implementazione attuale copre solo il caso banale. Rendila conforme al contratto.",
+  "entry_files": ["slugify.py"],
+  "timeout_seconds": 300,
+  "taxonomy": ["F03-edge-cases"]
+}

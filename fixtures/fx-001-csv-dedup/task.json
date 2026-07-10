@@ -1,0 +1,8 @@
+{
+  "id": "fx-001-csv-dedup",
+  "title": "Dedup di righe CSV per chiave",
+  "prompt": "La funzione `dedup_rows(rows, key)` in `dedup.py` deve rimuovere i duplicati da una lista di dict confrontando il valore della colonna `key`: vince la PRIMA occorrenza, l'ordine originale va preservato, e per le chiavi stringa il confronto è case-insensitive (usa str.casefold). La funzione attuale ha almeno un bug che i test pubblici non catturano. Correggila.",
+  "entry_files": ["dedup.py"],
+  "timeout_seconds": 300,
+  "taxonomy": ["F03-edge-cases", "F07-spec-adherence"]
+}

@@ -14,6 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aeh import sandbox
 from aeh.fixture import HIDDEN_PREFIX, PUBLIC_PREFIX, Fixture
 from aeh.runner import find_hidden_leaks
 
@@ -59,6 +60,9 @@ class GradeResult:
     tamper_suspect: list[str] = field(default_factory=list)
     hidden_sha256: str = ""
     public_sha256: str = ""
+    # Il codice dell'agente gira durante il grading: qui è registrato se la
+    # rete era negata ("seatbelt"/"unshare-net") oppure no e perché.
+    grading_sandbox: str = "disabled"
 
     @property
     def public_passed(self) -> int:
@@ -101,11 +105,25 @@ class GradeResult:
             "tamper_suspect": self.tamper_suspect,
             "hidden_sha256": self.hidden_sha256,
             "public_sha256": self.public_sha256,
+            "grading_sandbox": self.grading_sandbox,
         }
 
 
-def grade(fixture: Fixture, workspace: str | Path, run_dir: str | Path) -> GradeResult:
-    """Grade the agent's solution in a fresh directory. Never trusts workspace tests."""
+def grade(
+    fixture: Fixture,
+    workspace: str | Path,
+    run_dir: str | Path,
+    *,
+    net_sandbox: bool = True,
+) -> GradeResult:
+    """Grade the agent's solution in a fresh directory. Never trusts workspace tests.
+
+    With ``net_sandbox`` (default) the grading subprocess runs with network
+    access denied when a backend exists: grading never needs the network, and
+    the agent's entry files DO execute here. If the sandboxed run cannot even
+    produce results (backend broken on this host), it falls back to an
+    unsandboxed run and records that honestly.
+    """
     ws = Path(workspace).resolve()
     grading = Path(run_dir).resolve() / "grading"
     if grading.exists():
@@ -135,18 +153,37 @@ def grade(fixture: Fixture, workspace: str | Path, run_dir: str | Path) -> Grade
     runner_path = grading / "_aeh_testrun.py"
     runner_path.write_text(_TESTRUN_SCRIPT, encoding="utf-8")
     raw_path = grading / "_results_raw.json"
-    proc = subprocess.run(
-        ["python3", "_aeh_testrun.py", "tests", raw_path.name],
-        cwd=grading,
-        capture_output=True,
-        text=True,
-        timeout=max(60, fixture.timeout_seconds),
-        env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"},
-    )
-    if not raw_path.is_file():
-        raise RuntimeError(
-            f"test runner non ha prodotto risultati (rc={proc.returncode}): {proc.stderr[-500:]}"
+    argv = ["python3", "_aeh_testrun.py", "tests", raw_path.name]
+    backend = sandbox.backend() if net_sandbox else None
+    if net_sandbox and backend is None:
+        sandbox_label = "unavailable"
+    else:
+        sandbox_label = backend or "disabled"
+
+    def _run_tests(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            cmd,
+            cwd=grading,
+            capture_output=True,
+            text=True,
+            timeout=max(60, fixture.timeout_seconds),
+            env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"},
         )
+
+    try:
+        proc = _run_tests(sandbox.wrap_argv(argv, backend) if backend else argv)
+    except OSError:
+        if not backend:
+            raise
+        proc = None
+    if backend and not raw_path.is_file():
+        # Il backend stesso non è partito (es. unshare senza userns): meglio un
+        # grading valido e dichiarato non-sandboxed che nessun grading.
+        proc = _run_tests(argv)
+        sandbox_label = f"fallback-off:{backend}"
+    if not raw_path.is_file():
+        detail = f"rc={proc.returncode}: {proc.stderr[-500:]}" if proc else "exec fallita"
+        raise RuntimeError(f"test runner non ha prodotto risultati ({detail})")
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
 
     public = [t for t in raw if PUBLIC_PREFIX in t["id"]]
@@ -158,4 +195,5 @@ def grade(fixture: Fixture, workspace: str | Path, run_dir: str | Path) -> Grade
         tamper_suspect=find_hidden_leaks(ws),
         hidden_sha256=fixture.hidden_sha256(),
         public_sha256=fixture.public_sha256(),
+        grading_sandbox=sandbox_label,
     )

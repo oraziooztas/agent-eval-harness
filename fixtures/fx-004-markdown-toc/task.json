@@ -1,0 +1,8 @@
+{
+  "id": "fx-004-markdown-toc",
+  "title": "TOC da markdown: fence, slug, duplicati",
+  "prompt": "La funzione `make_toc(markdown)` in `mdtoc.py` estrae l'indice dagli header ATX di un documento markdown e restituisce una lista di tuple (livello, titolo, slug). Contratto: sono header SOLO le righe che iniziano con 1-6 caratteri `#` seguiti da uno spazio (`#hashtag` senza spazio NON è un header, 7+ `#` nemmeno); gli header dentro blocchi di codice recintati da ``` vanno ignorati; eventuali `#` di chiusura a fine riga (es. `## Titolo ##`) non fanno parte del titolo; slug = titolo minuscolo con spazi sostituiti da `-` e ogni altro carattere non [a-z0-9-] rimosso; titoli che producono lo stesso slug ricevono il suffisso `-2`, `-3`, ... in ordine di apparizione. L'implementazione attuale copre solo i casi banali. Rendila conforme al contratto.",
+  "entry_files": ["mdtoc.py"],
+  "timeout_seconds": 300,
+  "taxonomy": ["F03-edge-cases", "F07-spec-adherence"]
+}

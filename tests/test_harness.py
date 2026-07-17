@@ -24,9 +24,14 @@ from aeh.runner import (
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 FX_DEDUP = FIXTURES / "fx-001-csv-dedup"
 FX_SLUG = FIXTURES / "fx-002-slugify"
+FX_BACKOFF = FIXTURES / "fx-003-retry-backoff"
+FX_TOC = FIXTURES / "fx-004-markdown-toc"
 
 
-@pytest.fixture(params=[FX_DEDUP, FX_SLUG], ids=["dedup", "slugify"])
+@pytest.fixture(
+    params=[FX_DEDUP, FX_SLUG, FX_BACKOFF, FX_TOC],
+    ids=["dedup", "slugify", "backoff", "toc"],
+)
 def fixture(request) -> Fixture:
     return Fixture.load(request.param)
 

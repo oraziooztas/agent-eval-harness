@@ -1,0 +1,8 @@
+{
+  "id": "fx-003-retry-backoff",
+  "title": "Backoff esponenziale con cap e validazione",
+  "prompt": "La funzione `backoff_delays(attempts, base=1.0, cap=30.0)` in `backoff.py` calcola i ritardi (in secondi) per una serie di retry: il tentativo i-esimo attende base*2^i secondi, ma nessun ritardo può superare `cap`. Contratto completo: attempts=0 → lista vuota; attempts negativo → ValueError; base <= 0 oppure cap <= 0 → ValueError; ogni valore restituito è min(cap, base*2^i); il risultato ha esattamente `attempts` elementi anche per attempts grandi (niente overflow). L'implementazione attuale passa i casi felici ma non rispetta tutto il contratto. Correggila.",
+  "entry_files": ["backoff.py"],
+  "timeout_seconds": 300,
+  "taxonomy": ["F03-edge-cases", "F07-spec-adherence"]
+}

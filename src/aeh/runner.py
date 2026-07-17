@@ -7,6 +7,8 @@ and re-checked at grading time.
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import time
@@ -14,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aeh.fixture import HIDDEN_PREFIX, Fixture
+from aeh.sandbox import wrap_shell
 
 PROMPT_FILE = "PROMPT.md"
+USAGE_ENV = "AEH_USAGE_FILE"
 
 _PROMPT_TEMPLATE = """# {title}
 
@@ -37,6 +41,7 @@ class SolverResult:
     returncode: int | None
     duration_seconds: float
     transcript_path: Path
+    sandbox: str = "off"  # "off" | backend name (rete negata al solver)
 
 
 def prepare_workspace(fixture: Fixture, run_dir: str | Path) -> Path:
@@ -80,19 +85,35 @@ def run_solver(
     command: str,
     timeout_seconds: int,
     transcript_path: str | Path,
+    *,
+    net_sandbox_backend: str | None = None,
+    usage_file: str | Path | None = None,
 ) -> SolverResult:
-    """Run the solver shell command with cwd=workspace, capturing a transcript."""
+    """Run the solver shell command with cwd=workspace, capturing a transcript.
+
+    With ``net_sandbox_backend`` the command runs with network access denied
+    (only for solvers that don't need the network: local models, script bots).
+    With ``usage_file`` the solver sees ``AEH_USAGE_FILE`` in the environment
+    and can report its own token/cost usage there (see load_usage).
+    """
     tpath = Path(transcript_path).resolve()
     tpath.parent.mkdir(parents=True, exist_ok=True)
+    exec_command = command
+    if net_sandbox_backend:
+        exec_command = wrap_shell(command, net_sandbox_backend)
+    env = None
+    if usage_file is not None:
+        env = os.environ | {USAGE_ENV: str(Path(usage_file).resolve())}
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            command,
+            exec_command,
             shell=True,
             cwd=workspace,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=env,
         )
         status = "ok" if proc.returncode == 0 else "error"
         returncode: int | None = proc.returncode
@@ -104,11 +125,54 @@ def run_solver(
     duration = time.monotonic() - start
 
     tpath.write_text(
-        f"$ {command}\n(status: {status}, rc: {returncode}, {duration:.1f}s)\n"
+        f"$ {exec_command}\n(status: {status}, rc: {returncode}, {duration:.1f}s)\n"
         f"\n--- stdout ---\n{out}\n--- stderr ---\n{err}\n",
         encoding="utf-8",
     )
-    return SolverResult(status, returncode, duration, tpath)
+    return SolverResult(status, returncode, duration, tpath, net_sandbox_backend or "off")
+
+
+def load_usage(
+    usage_file: str | Path,
+    price_in_eur_mtok: float | None = None,
+    price_out_eur_mtok: float | None = None,
+) -> dict | None:
+    """Read the solver-reported usage file, if any.
+
+    Expected JSON: ``{"tokens_in": int, "tokens_out": int, "cost_eur": float}``
+    (all optional). A missing cost is computed from tokens when both prices
+    (EUR per Mtok) are given. Provenance is always "solver-reported": the value
+    comes from the process under evaluation, it is data, not proof.
+    """
+    path = Path(usage_file)
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("usage non è un oggetto JSON")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return {"error": f"usage file non parsabile: {exc}", "source": "solver-reported"}
+
+    def _num(key: str) -> float | None:
+        value = raw.get(key)
+        return float(value) if isinstance(value, (int, float)) else None
+
+    tokens_in, tokens_out, cost = _num("tokens_in"), _num("tokens_out"), _num("cost_eur")
+    if (
+        cost is None
+        and tokens_in is not None
+        and tokens_out is not None
+        and price_in_eur_mtok is not None
+        and price_out_eur_mtok is not None
+    ):
+        cost = tokens_in / 1e6 * price_in_eur_mtok + tokens_out / 1e6 * price_out_eur_mtok
+    return {
+        "tokens_in": int(tokens_in) if tokens_in is not None else None,
+        "tokens_out": int(tokens_out) if tokens_out is not None else None,
+        "cost_eur": round(cost, 4) if cost is not None else None,
+        "source": "solver-reported",
+    }
 
 
 def apply_reference_solver(fixture: Fixture, workspace: Path) -> None:

@@ -22,4 +22,4 @@ jobs:
       - name: Test with coverage gate
         run: pytest --cov=aeh --cov-fail-under=80
       - name: Fixture contract
-        run: aeh validate fixtures/fx-001-csv-dedup fixtures/fx-002-slugify
+        run: aeh validate fixtures/fx-*

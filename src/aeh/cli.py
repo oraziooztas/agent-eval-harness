@@ -11,10 +11,12 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aeh import sandbox
 from aeh.fixture import Fixture, FixtureError
 from aeh.grader import grade
+from aeh.matrix import write_matrix
 from aeh.report import write_results, write_run_card
-from aeh.runner import apply_reference_solver, prepare_workspace, run_solver
+from aeh.runner import apply_reference_solver, load_usage, prepare_workspace, run_solver
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,9 +33,29 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--ref", action="store_true", help="solver builtin: applica la reference solution")
     group.add_argument("--noop", action="store_true", help="solver builtin: non fa nulla (baseline seed)")
     p_run.add_argument("--out", help="directory del run (default: runs/{id}-{ts})")
+    p_run.add_argument(
+        "--sandbox-solver",
+        action="store_true",
+        help="nega la rete al solver (solo solver locali/offline; errore se nessun backend)",
+    )
+    p_run.add_argument(
+        "--no-grading-sandbox",
+        action="store_true",
+        help="non negare la rete al grading (default: negata quando un backend esiste)",
+    )
+    p_run.add_argument("--price-in", type=float, help="prezzo input EUR per Mtok (per usage)")
+    p_run.add_argument("--price-out", type=float, help="prezzo output EUR per Mtok (per usage)")
+    p_run.add_argument(
+        "--label",
+        help="etichetta del solver nei report (default: il comando); chiave di raggruppamento in matrix",
+    )
 
     p_rep = sub.add_parser("report", help="rigenera run_card.md da results.json")
     p_rep.add_argument("run_dir")
+
+    p_mat = sub.add_parser("matrix", help="aggrega N run dir in una matrice cross-solver")
+    p_mat.add_argument("run_dirs", nargs="+")
+    p_mat.add_argument("--out", default="runs/matrix", help="directory output (default: runs/matrix)")
 
     args = parser.parse_args(argv)
     try:
@@ -41,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_validate(args.fixtures)
         if args.cmd == "run":
             return _cmd_run(args)
+        if args.cmd == "matrix":
+            return _cmd_matrix(args)
         return _cmd_report(args.run_dir)
     except (FixtureError, FileNotFoundError, FileExistsError, RuntimeError) as exc:
         print(f"aeh: errore: {exc}", file=sys.stderr)
@@ -53,21 +77,35 @@ def _cmd_run(args: argparse.Namespace) -> int:
     run_dir = Path(args.out) if args.out else Path("runs") / f"{fixture.id}-{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    solver_backend = None
+    if args.sandbox_solver:
+        solver_backend = sandbox.backend()
+        if solver_backend is None:
+            raise RuntimeError("--sandbox-solver richiesto ma nessun backend sandbox su questo host")
+
     workspace = prepare_workspace(fixture, run_dir)
     solver_result = None
+    usage = None
     if args.ref:
         apply_reference_solver(fixture, workspace)
-        label = "builtin:ref"
+        label = args.label or "builtin:ref"
     elif args.noop:
-        label = "builtin:noop"
+        label = args.label or "builtin:noop"
     else:
-        label = args.solver
+        label = args.label or args.solver
+        usage_file = run_dir / "usage.json"
         solver_result = run_solver(
-            workspace, args.solver, fixture.timeout_seconds, run_dir / "transcript.txt"
+            workspace,
+            args.solver,
+            fixture.timeout_seconds,
+            run_dir / "transcript.txt",
+            net_sandbox_backend=solver_backend,
+            usage_file=usage_file,
         )
+        usage = load_usage(usage_file, args.price_in, args.price_out)
 
-    result = grade(fixture, workspace, run_dir)
-    write_results(run_dir, fixture, label, solver_result, result)
+    result = grade(fixture, workspace, run_dir, net_sandbox=not args.no_grading_sandbox)
+    write_results(run_dir, fixture, label, solver_result, result, usage)
     card = write_run_card(run_dir)
     print(
         f"{fixture.id}: {result.verdict} — public {result.public_passed}/{len(result.public)}, "
@@ -104,6 +142,12 @@ def _cmd_validate(fixture_paths: list[str]) -> int:
 def _cmd_report(run_dir: str) -> int:
     card = write_run_card(run_dir)
     print(f"run card: {card}")
+    return 0
+
+
+def _cmd_matrix(args: argparse.Namespace) -> int:
+    md = write_matrix(args.run_dirs, args.out)
+    print(f"matrix: {md}")
     return 0
 
 

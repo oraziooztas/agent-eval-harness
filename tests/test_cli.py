@@ -37,6 +37,14 @@ def test_run_shell_solver(tmp_path):
     assert (out / "transcript.txt").is_file()
 
 
+def test_run_custom_label(tmp_path):
+    out = tmp_path / "run"
+    code = main(["run", str(FX_DEDUP), "--ref", "--label", "agent-x", "--out", str(out)])
+    assert code == 0
+    data = json.loads((out / "results.json").read_text())
+    assert data["solver"]["label"] == "agent-x"
+
+
 def test_validate_good_fixtures(capsys):
     code = main(["validate", str(FX_DEDUP), str(FX_SLUG)])
     assert code == 0

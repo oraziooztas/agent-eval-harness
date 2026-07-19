@@ -109,10 +109,16 @@ def test_solver_sandboxed_probe(tmp_path):
 # ---------- Grading sandboxed ----------
 
 def test_grading_records_sandbox(tmp_path):
+    """Lo stato reale è registrato: backend attivo, fallback dichiarato, o assenza."""
     fx = Fixture.load(FX_DEDUP)
     ws = prepare_workspace(fx, tmp_path)
     result = grade(fx, ws, tmp_path)
-    assert result.grading_sandbox == (sandbox.backend() or "unavailable")
+    backend = sandbox.backend()
+    if backend is None:
+        assert result.grading_sandbox == "unavailable"
+    else:
+        # host senza privilegi netns (es. runner CI): il fallback onesto è uno stato valido
+        assert result.grading_sandbox in {backend, f"fallback-off:{backend}"}
 
 
 def test_grading_sandbox_disabled(tmp_path):

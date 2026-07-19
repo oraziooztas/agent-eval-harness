@@ -79,11 +79,23 @@ riporta per ciascun solver solve rate, hidden gap, latenza mediana e
 **€/task-risolto** (solo se TUTTI i run del solver hanno un costo: niente medie
 inventate su dati parziali).
 
-## Compatibilità AFB
+## Ponte AFB (`aeh import-afb`)
 
-Le fixture usano la stessa forma dell'Agent Failure Eval Bench (seed / public / hidden / reference): un task AFB diventa una fixture aggiungendo `task.json` con i campi sopra e rinominando i file di test secondo i prefissi `test_public*` / `test_hidden*`. Il campo `taxonomy` accetta i codici F01-F12.
+aeh è il runner delle prossime matrici dell'[Agent Failure Eval Bench](https://github.com/oraziooztas/agent-failure-eval-bench): due repo separati con ponte a senso unico (ADR-001 in `docs/`) — AFB resta l'artefatto-bench (spec, taxonomy, policy, evidence), aeh esegue. L'importer converte i task eseguibili di AFB in fixture aeh:
+
+```bash
+aeh import-afb path/al/repo/afb --out fixtures             # holdout dentro il repo di lavoro
+aeh import-afb path/al/clone/pubblico --holdout-dir DIR    # materiali privati esterni
+```
+
+- `agent_visible/` → `seed/` (senza `tests/` e TASK.md, che diventa il prompt); test pubblici rinominati `test_public_*`; gli asset non-.py dei test restano visibili nel workspace ma il grading li ignora.
+- `entry_files` rilevati per diff reference↔visibile; gli artefatti solo-in-reference che l'agente deve produrre (es. `attempt_log.json`) ottengono uno stub nel seed, registrato in `provenance.seed_stubs` insieme a origine del holdout e timestamp.
+- Il bundle pubblico AFB **esclude** hidden test e reference (disclosure policy): senza materiali privati l'import è `PARTIAL` (exit 2) con un `MISSING.md` che elenca gli hidden check pubblicati come guida d'autore. Le fixture importate complete contengono materiale privato del bench: NON vanno committate in un repo pubblico (qui: `.gitignore fixtures/afb-*`).
+- I check di processo/rubrica di AFB (trace, comunicazione) non diventano test aeh: passa solo la parte meccanicamente eseguibile. I risultati delle matrici tornano in AFB come evidence, citando la versione di aeh usata.
+
+Al primo import reale (v0.3.0) `aeh validate` ha scovato un drift reale nel bench: l'hidden test di `afb-v0-006` aspettava un trailing newline che la nota pubblicata non ha — confermato dal validator interno di AFB e corretto lato holdout privato (il file pubblico è frozen dal manifest SHA-256).
 
 ## Qualità
 
-- 61 test pytest, coverage 95% (gate CI: 80%), ruff clean.
-- La suite prova esplicitamente: separation (nessun hidden nel workspace), tamper-proofing (edit ai test → grading invariato), contratto fixture (4 fixture), timeout solver, exit code CLI, negazione di rete REALE (probe su loopback: refused senza sandbox, EPERM/unreachable sotto), fallback onesto del backend, ingestione usage e matrice.
+- 70 test pytest, coverage 94% (gate CI: 80%), ruff clean.
+- La suite prova esplicitamente: separation (nessun hidden nel workspace), tamper-proofing (edit ai test → grading invariato), contratto fixture (4 fixture), timeout solver, exit code CLI, negazione di rete REALE (probe su loopback: refused senza sandbox, EPERM/unreachable sotto), fallback onesto del backend, ingestione usage, matrice, e import AFB (mappatura, rename, stub, holdout esterno, partial, contratto pieno della fixture importata).

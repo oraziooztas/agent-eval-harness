@@ -1,6 +1,6 @@
 # ADR-001 — aeh è il runner, AFB resta il bench: paralleli con ponte
 
-**Stato**: proposto (decisione finale di Orazio) · **Data**: 2026-07-17
+**Stato**: accettato (ratificato da Orazio il 2026-07-19) · **Data**: 2026-07-17
 **Domanda aperta dal 10/07**: "AFB adotta `aeh` come runner o restano paralleli?"
 
 ## Contesto (verificato alla fonte, 17/07)
@@ -45,3 +45,13 @@ Il ponte è a senso unico e leggero:
 Se AFB v0.2 volesse la **riproducibilità turnkey da parte di terzi**, allora si
 pinna aeh come dipendenza versionata dichiarata nel README del bench (riferimento,
 non vendoring). Rivalutare a quel punto, non prima.
+
+## Attuazione (2026-07-19, v0.3.0)
+
+Punto 1 del ponte implementato: `aeh import-afb` (`src/aeh/importer.py`). Le 3
+fixture disclosed importate dal repo di lavoro validano col contratto pieno
+(`aeh validate` 7/7). Il primo import ha scovato un drift reale in afb-v0-006
+(trailing newline: hidden test vs nota pubblicata), confermato dal
+`validate_fixtures.py` di AFB e corretto lato holdout privato. Le fixture
+importate contengono materiale privato del bench → escluse dal repo pubblico
+(`.gitignore fixtures/afb-*`), coerente con la disclosure policy.

@@ -14,6 +14,7 @@ from pathlib import Path
 from aeh import sandbox
 from aeh.fixture import Fixture, FixtureError
 from aeh.grader import grade
+from aeh.importer import AfbImportError, import_tasks
 from aeh.matrix import write_matrix
 from aeh.report import write_results, write_run_card
 from aeh.runner import apply_reference_solver, load_usage, prepare_workspace, run_solver
@@ -57,6 +58,23 @@ def main(argv: list[str] | None = None) -> int:
     p_mat.add_argument("run_dirs", nargs="+")
     p_mat.add_argument("--out", default="runs/matrix", help="directory output (default: runs/matrix)")
 
+    p_imp = sub.add_parser(
+        "import-afb",
+        help="importa i task eseguibili di agent-failure-eval-bench come fixture aeh (ADR-001)",
+    )
+    p_imp.add_argument("afb_root", help="root del repo AFB (clone pubblico o repo di lavoro)")
+    p_imp.add_argument(
+        "--task-id",
+        action="append",
+        help="importa solo questo task id (ripetibile; default: tutti gli eseguibili)",
+    )
+    p_imp.add_argument("--out", default="fixtures", help="directory destinazione (default: fixtures)")
+    p_imp.add_argument(
+        "--holdout-dir",
+        help="materiale privato per task id: <dir>/<task-id>/{hidden_tests,reference_solution}",
+    )
+    p_imp.add_argument("--force", action="store_true", help="sovrascrive fixture già importate")
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "validate":
@@ -65,8 +83,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_run(args)
         if args.cmd == "matrix":
             return _cmd_matrix(args)
+        if args.cmd == "import-afb":
+            return _cmd_import(args)
         return _cmd_report(args.run_dir)
-    except (FixtureError, FileNotFoundError, FileExistsError, RuntimeError) as exc:
+    except (AfbImportError, FixtureError, FileNotFoundError, FileExistsError, RuntimeError) as exc:
         print(f"aeh: errore: {exc}", file=sys.stderr)
         return 1
 
@@ -137,6 +157,34 @@ def _cmd_validate(fixture_paths: list[str]) -> int:
         for label, passed in checks:
             print(f"  {'✓' if passed else '✗'} {label}")
     return 1 if failures else 0
+
+
+def _cmd_import(args: argparse.Namespace) -> int:
+    outcomes = import_tasks(
+        args.afb_root,
+        args.out,
+        task_ids=args.task_id,
+        holdout_dir=args.holdout_dir,
+        force=args.force,
+    )
+    partials = 0
+    for outcome in outcomes:
+        if outcome.status == "complete":
+            stub_note = (
+                f" (stub nel seed: {', '.join(outcome.seed_stubs)})" if outcome.seed_stubs else ""
+            )
+            print(
+                f"{outcome.task_id} → {outcome.fixture_dir} [complete, "
+                f"holdout: {outcome.hidden_origin}] entry: {', '.join(outcome.entry_files)}{stub_note}"
+            )
+        else:
+            partials += 1
+            print(
+                f"{outcome.task_id} → {outcome.fixture_dir} [PARTIAL] "
+                f"mancano: {', '.join(outcome.missing)} — vedi MISSING.md"
+            )
+    print(f"importate {len(outcomes)} fixture, {partials} parziali")
+    return 2 if partials else 0
 
 
 def _cmd_report(run_dir: str) -> int:

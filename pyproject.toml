@@ -1,6 +1,6 @@
 [project]
 name = "agent-eval-harness"
-version = "0.2.0"
+version = "0.3.0"
 description = "Minimal agent evaluation harness with true hidden-check separation: seed repo + public tests to the agent, pristine hidden tests only at grading time."
 readme = "README.md"
 requires-python = ">=3.11"

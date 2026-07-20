@@ -1,101 +1,102 @@
 # agent-eval-harness
 
-Harness minimale per valutare coding agent con **hidden-check separation vera**: l'agente lavora su un repo seed con i soli test pubblici; la valutazione avviene in una directory pulita con test pubblici E nascosti intatti, presi dalla fixture. Runtime 100% stdlib.
+Minimal harness for evaluating coding agents with **real hidden-check separation**: the agent works on a seed repo with only the public tests; grading happens in a clean directory with both public and hidden tests intact, taken from the fixture. Runtime is 100% stdlib.
 
-## Perché esiste
+## Why it exists
 
-Valutare un agente sui test che l'agente stesso può vedere (o modificare) non misura niente. Questo harness rende la separazione un invariante strutturale, non una convenzione:
+Evaluating an agent on the tests the agent itself can see (or modify) measures nothing. This harness makes the separation a structural invariant, not a convention:
 
-1. **Il workspace dell'agente non contiene mai gli hidden test** (verificato a fine preparazione e ri-verificato al grading).
-2. **Il grading non si fida del workspace**: directory fresca = seed intatto + SOLO gli entry file dell'agente + test pubblici e nascosti presi dalla fixture. Un agente che riscrive i test cambia il proprio grade di zero.
-3. **Ogni run registra lo SHA-256 del set nascosto**: prova crittografica di quali check hanno valutato il run.
+1. **The agent's workspace never contains the hidden tests** (checked at the end of preparation and re-checked at grading).
+2. **Grading does not trust the workspace**: a fresh directory holds the intact seed plus ONLY the agent's entry files plus public and hidden tests taken from the fixture. An agent that rewrites the tests changes its own grade by zero.
+3. **Every run records the SHA-256 of the hidden set**: cryptographic proof of which checks graded the run.
 
-## Anatomia di una fixture
+## Anatomy of a fixture
 
 ```
 fx-001-csv-dedup/
 ├── task.json          id, title, prompt, entry_files, timeout_seconds, taxonomy
-├── seed/              il repo buggy/incompleto da cui parte l'agente
-├── tests_public/      test_public*.py — visibili all'agente (happy path)
-├── tests_hidden/      test_hidden*.py — MAI visti dall'agente (edge case)
-└── reference/         soluzione corretta degli entry file
+├── seed/              the buggy/incomplete repo the agent starts from
+├── tests_public/      test_public*.py — visible to the agent (happy path)
+├── tests_hidden/      test_hidden*.py — NEVER seen by the agent (edge cases)
+└── reference/         correct solution of the entry files
 ```
 
-Contratto di design (verificato da `aeh validate`): il seed **passa i public** ma **fallisce ≥1 hidden** (il bug vive negli edge case); la reference passa tutto. Così "passa i test pubblici" e "ha risolto il task" restano misure distinte.
+Design contract (checked by `aeh validate`): the seed **passes the public tests** but **fails ≥1 hidden test** (the bug lives in the edge cases); the reference passes everything. That way "passes the public tests" and "solved the task" stay distinct measures.
 
-## Uso
+## Usage
 
 ```bash
-# installazione (dev)
+# install (dev)
 uv venv .venv && uv pip install -e ".[dev]" --python .venv/bin/python
 
-# 1. verifica il contratto delle fixture
+# 1. check the fixture contract
 aeh validate fixtures/fx-001-csv-dedup fixtures/fx-002-slugify
 
-# 2. baseline: cosa succede senza agente (seed as-is)
+# 2. baseline: what happens with no agent (seed as-is)
 aeh run fixtures/fx-001-csv-dedup --noop      # exit 2, PARTIAL
 
-# 3. sanity: la reference risolve
+# 3. sanity: the reference solves it
 aeh run fixtures/fx-001-csv-dedup --ref       # exit 0, SOLVED
 
-# 4. un agente vero: qualsiasi comando shell, cwd = workspace
+# 4. a real agent: any shell command, cwd = workspace
 aeh run fixtures/fx-001-csv-dedup \
   --solver 'claude -p "$(cat PROMPT.md)" --permission-mode acceptEdits' \
   --label claude-sonnet --price-in 2.5 --price-out 12.0
 
-# 5. matrice cross-solver da N run (solve rate, hidden gap, €/task risolto)
+# 5. cross-solver matrix from N runs (solve rate, hidden gap, EUR/solved task)
 aeh matrix runs/* --out runs/matrix
 ```
 
-Ogni run produce `runs/{id}-{ts}/` con `workspace/` (ciò che l'agente ha visto e toccato), `grading/` (la valutazione pulita), `transcript.txt`, `results.json` e `run_card.md` (verdetto, tabella public/hidden, hash del set nascosto, riproduzione).
+Each run produces `runs/{id}-{ts}/` with `workspace/` (what the agent saw and touched), `grading/` (the clean evaluation), `transcript.txt`, `results.json` and `run_card.md` (verdict, public/hidden table, hash of the hidden set, reproduction steps).
 
-Exit code: `0` solved · `1` errore harness/contratto · `2` run valido ma non risolto.
+Exit codes: `0` solved · `1` harness/contract error · `2` valid run but not solved.
 
-## Cosa misura (e cosa no)
+## What it measures (and what it doesn't)
 
-- Misura: capacità dell'agente di risolvere il contratto REALE del task, non solo i test che vede. Il gap public-pass vs hidden-pass è il segnale interessante (overfitting ai test visibili).
-- `tamper_suspect`: file con nome da hidden test creati dall'agente nel workspace vengono flaggati nel run card (il grading resta comunque valido).
-- Non fa (ancora): confinamento filesystem del solver (gira col tuo utente: usa agent CLI di cui ti fidi), multi-linguaggio (i test fixture sono `unittest` Python), parallelismo di run.
+- Measures: the agent's ability to solve the REAL contract of the task, not just the tests it sees. The gap between public-pass and hidden-pass is the interesting signal (overfitting to the visible tests).
+- `tamper_suspect`: files named like hidden tests, created by the agent in the workspace, are flagged in the run card (grading stays valid either way).
+- Does not (yet): filesystem confinement of the solver (it runs as your user, so use an agent CLI you trust), multi-language support (fixture tests are Python `unittest`), run parallelism.
 
-## Sandbox di rete
+## Network sandbox
 
-Il codice scritto dall'agente VIENE ESEGUITO al grading (i test importano gli entry
-file): per questo il grading gira con la rete negata quando esiste un backend —
-`sandbox-exec` su macOS (seatbelt: deprecato negli header ma presente e mantenuto;
-una connect rifiutata diventa EPERM), `unshare --net` su Linux. Ogni run registra in
-`results.json` cosa è successo davvero (`grading_sandbox`: backend, `unavailable`,
-`disabled` o `fallback-off:*` se il backend non partiva). Escape: `--no-grading-sandbox`.
-Il solver invece ha la rete per default (gli agent CLI ne hanno bisogno per l'API);
-`--sandbox-solver` la nega esplicitamente ai solver locali/offline.
+The code written by the agent IS EXECUTED at grading (the tests import the entry
+files), so grading runs with the network denied whenever a backend exists:
+`sandbox-exec` on macOS (seatbelt: deprecated in the headers but present and
+maintained; a refused connect becomes EPERM), `unshare --net` on Linux. Every run
+records in `results.json` what actually happened (`grading_sandbox`: backend,
+`unavailable`, `disabled`, or `fallback-off:*` if the backend would not start).
+Escape hatch: `--no-grading-sandbox`. The solver, on the other hand, has network by
+default (agent CLIs need it for the API); `--sandbox-solver` denies it explicitly to
+local/offline solvers.
 
-## Costo per task risolto
+## Cost per solved task
 
-Il solver può riportare il proprio consumo scrivendo JSON nel file indicato da
-`$AEH_USAGE_FILE` (`{"tokens_in": …, "tokens_out": …, "cost_eur": …}`); con
-`--price-in/--price-out` (EUR per Mtok) il costo viene calcolato dai token. La
-provenienza è sempre marcata `solver-reported`: è un dato del processo sotto
-valutazione, non una prova. `aeh matrix` aggrega N run per label (`--label`) e
-riporta per ciascun solver solve rate, hidden gap, latenza mediana e
-**€/task-risolto** (solo se TUTTI i run del solver hanno un costo: niente medie
-inventate su dati parziali).
+The solver can report its own consumption by writing JSON to the file named by
+`$AEH_USAGE_FILE` (`{"tokens_in": …, "tokens_out": …, "cost_eur": …}`); with
+`--price-in/--price-out` (EUR per Mtok) the cost is computed from the tokens. The
+provenance is always marked `solver-reported`: it is data from the process under
+evaluation, not a proof. `aeh matrix` aggregates N runs per label (`--label`) and
+reports, for each solver, solve rate, hidden gap, median latency and
+**EUR/solved-task** (only when ALL of the solver's runs carry a cost: no invented
+averages on partial data).
 
-## Ponte AFB (`aeh import-afb`)
+## AFB bridge (`aeh import-afb`)
 
-aeh è il runner delle prossime matrici dell'[Agent Failure Eval Bench](https://github.com/oraziooztas/agent-failure-eval-bench): due repo separati con ponte a senso unico (ADR-001 in `docs/`) — AFB resta l'artefatto-bench (spec, taxonomy, policy, evidence), aeh esegue. L'importer converte i task eseguibili di AFB in fixture aeh:
+aeh is the runner for the next matrices of the [Agent Failure Eval Bench](https://github.com/oraziooztas/agent-failure-eval-bench): two separate repos with a one-way bridge (ADR-001 in `docs/`). AFB stays the bench artifact (specs, taxonomy, policy, evidence), aeh executes. The importer converts AFB's executable tasks into aeh fixtures:
 
 ```bash
-aeh import-afb path/al/repo/afb --out fixtures             # holdout dentro il repo di lavoro
-aeh import-afb path/al/clone/pubblico --holdout-dir DIR    # materiali privati esterni
+aeh import-afb path/to/afb/repo --out fixtures               # holdout inside the working repo
+aeh import-afb path/to/public/clone --holdout-dir DIR        # external private materials
 ```
 
-- `agent_visible/` → `seed/` (senza `tests/` e TASK.md, che diventa il prompt); test pubblici rinominati `test_public_*`; gli asset non-.py dei test restano visibili nel workspace ma il grading li ignora.
-- `entry_files` rilevati per diff reference↔visibile; gli artefatti solo-in-reference che l'agente deve produrre (es. `attempt_log.json`) ottengono uno stub nel seed, registrato in `provenance.seed_stubs` insieme a origine del holdout e timestamp.
-- Il bundle pubblico AFB **esclude** hidden test e reference (disclosure policy): senza materiali privati l'import è `PARTIAL` (exit 2) con un `MISSING.md` che elenca gli hidden check pubblicati come guida d'autore. Le fixture importate complete contengono materiale privato del bench: NON vanno committate in un repo pubblico (qui: `.gitignore fixtures/afb-*`).
-- I check di processo/rubrica di AFB (trace, comunicazione) non diventano test aeh: passa solo la parte meccanicamente eseguibile. I risultati delle matrici tornano in AFB come evidence, citando la versione di aeh usata.
+- `agent_visible/` → `seed/` (without `tests/` and TASK.md, which becomes the prompt); public tests renamed `test_public_*`; the non-.py test assets stay visible in the workspace but grading ignores them.
+- `entry_files` detected by diffing reference against visible; reference-only artifacts the agent must produce (e.g. `attempt_log.json`) get a stub in the seed, recorded in `provenance.seed_stubs` together with the holdout origin and timestamp.
+- The public AFB bundle **excludes** hidden tests and reference (disclosure policy): without the private materials the import is `PARTIAL` (exit 2) with a `MISSING.md` listing the published hidden checks as author guidance. Complete imported fixtures contain the bench's private material, so do NOT commit them to a public repo (here: `.gitignore fixtures/afb-*`).
+- AFB's process/rubric checks (trace, communication) do not become aeh tests: only the mechanically executable part carries over. Matrix results go back to AFB as evidence, citing the version of aeh used.
 
-Al primo import reale (v0.3.0) `aeh validate` ha scovato un drift reale nel bench: l'hidden test di `afb-v0-006` aspettava un trailing newline che la nota pubblicata non ha — confermato dal validator interno di AFB e corretto lato holdout privato (il file pubblico è frozen dal manifest SHA-256).
+On the first real import (v0.3.0) `aeh validate` caught a real drift in the bench: the hidden test of `afb-v0-006` expected a trailing newline the published note does not have, confirmed by AFB's internal validator and fixed on the private holdout side (the public file is frozen by the SHA-256 manifest).
 
-## Qualità
+## Quality
 
-- 70 test pytest, coverage 94% (gate CI: 80%), ruff clean.
-- La suite prova esplicitamente: separation (nessun hidden nel workspace), tamper-proofing (edit ai test → grading invariato), contratto fixture (4 fixture), timeout solver, exit code CLI, negazione di rete REALE (probe su loopback: refused senza sandbox, EPERM/unreachable sotto), fallback onesto del backend, ingestione usage, matrice, e import AFB (mappatura, rename, stub, holdout esterno, partial, contratto pieno della fixture importata).
+- 70 pytest tests, 94% coverage (CI gate: 80%), ruff clean.
+- The suite explicitly checks: separation (no hidden test in the workspace), tamper-proofing (edits to the tests leave grading unchanged), fixture contract (4 fixtures), solver timeout, CLI exit codes, REAL network denial (loopback probe: refused without the sandbox, EPERM/unreachable under it), honest backend fallback, usage ingestion, matrix, and AFB import (mapping, rename, stub, external holdout, partial, full contract of the imported fixture).

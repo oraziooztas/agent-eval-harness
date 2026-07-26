@@ -39,9 +39,11 @@ aeh run fixtures/fx-001-csv-dedup --noop      # exit 2, PARTIAL
 aeh run fixtures/fx-001-csv-dedup --ref       # exit 0, SOLVED
 
 # 4. a real agent: any shell command, cwd = workspace
-aeh run fixtures/fx-001-csv-dedup \
+#    --require-api-key: pays in dollars with an API key, not with the subscription
+AEH_ANTHROPIC_API_KEY='sk-ant-…' aeh run fixtures/fx-001-csv-dedup \
   --solver 'claude -p "$(cat PROMPT.md)" --permission-mode acceptEdits' \
-  --label claude-sonnet --price-in 2.5 --price-out 12.0
+  --require-api-key AEH_ANTHROPIC_API_KEY \
+  --label claude-sonnet --price-in 2 --price-out 10
 
 # 5. cross-solver matrix from N runs (solve rate, hidden gap, EUR/solved task)
 aeh matrix runs/* --out runs/matrix
@@ -69,16 +71,47 @@ Escape hatch: `--no-grading-sandbox`. The solver, on the other hand, has network
 default (agent CLIs need it for the API); `--sandbox-solver` denies it explicitly to
 local/offline solvers.
 
+## Credential: API key, not subscription
+
+An agent CLI can authenticate in two ways, and **only one of them is measurable**.
+On a subscription (e.g. Claude Code's Pro/Max plan) a run costs no dollars: it
+consumes session quota, and a per-token cost simply does not exist — so
+`$AEH_USAGE_FILE` cannot produce an honest cost-per-solved-task. With an API key
+you pay in dollars and the number is real.
+
+`--require-api-key [VAR]` makes the choice explicit: it reads the key from `VAR`
+(default `ANTHROPIC_API_KEY`), injects it as `ANTHROPIC_API_KEY` **only into the
+solver subprocess environment**, and if it is missing it fails with exit 1
+*before* preparing the workspace — never a silent fallback onto the subscription.
+`results.json` records the provenance (`solver.credential`: the source variable
+and a truncated `sha256` of the key, never the value) so you know which
+credential paid for which run.
+
+The default `VAR` is indirect for a practical reason: many setups `unset
+ANTHROPIC_API_KEY` in the interactive shell precisely to stop Claude Code from
+spilling onto API credits. Keeping the eval key in a dedicated variable
+(`AEH_ANTHROPIC_API_KEY`) leaves that guardrail intact and only the solver sees
+it. If the solver is a known agent CLI and `--require-api-key` is absent, `aeh`
+prints a warning rather than letting you find out after the run that it was
+spending quota.
+
+Zero-cost estimate before spending: `python3 scripts/estimate_cost.py fixtures/…`
+measures the fixtures' real context and separates the measured part from the
+assumptions about the agent loop (turns, scaffold), which are what actually drive
+the cost.
+
 ## Cost per solved task
 
 The solver can report its own consumption by writing JSON to the file named by
 `$AEH_USAGE_FILE` (`{"tokens_in": …, "tokens_out": …, "cost_eur": …}`); with
-`--price-in/--price-out` (EUR per Mtok) the cost is computed from the tokens. The
-provenance is always marked `solver-reported`: it is data from the process under
-evaluation, not a proof. `aeh matrix` aggregates N runs per label (`--label`) and
-reports, for each solver, solve rate, hidden gap, median latency and
-**EUR/solved-task** (only when ALL of the solver's runs carry a cost: no invented
-averages on partial data).
+`--price-in/--price-out` the cost is computed from the tokens. ⚠️ Both flags are
+**pure multipliers**: the currency is whatever the prices you pass are in, not
+EUR. With Anthropic list prices (USD/Mtok) the `cost_eur` field contains dollars.
+The provenance is always marked `solver-reported`: it is data from the process
+under evaluation, not a proof. `aeh matrix` aggregates N runs per label
+(`--label`) and reports, for each solver, solve rate, hidden gap, median latency
+and **cost/solved-task** (only when ALL of the solver's runs carry a cost: no
+invented averages on partial data).
 
 ## AFB bridge (`aeh import-afb`)
 

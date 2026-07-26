@@ -1,6 +1,7 @@
 """Test della CLI: exit codes e artefatti su disco."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -76,3 +77,73 @@ def test_error_on_missing_fixture(capsys):
     code = main(["run", "/nonexistent/fixture", "--noop"])
     assert code == 1
     assert "errore" in capsys.readouterr().err
+
+
+# --- credenziale API: esplicita, mai l'abbonamento -------------------------
+
+
+def test_require_api_key_missing_fails_loudly(tmp_path, capsys, monkeypatch):
+    """Chiave assente → exit 1 con messaggio azionabile, PRIMA di creare il workspace."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    out = tmp_path / "run"
+    code = main(["run", str(FX_DEDUP), "--solver", "true", "--out", str(out), "--require-api-key"])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "credenziale assente" in err
+    assert "ANTHROPIC_API_KEY" in err
+    assert "abbonamento" in err  # la distinzione col piano Claude Code è nel messaggio
+    assert not (out / "workspace").exists()  # fallito a costo zero
+
+
+def test_require_api_key_rejects_empty_value(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    code = main(
+        ["run", str(FX_DEDUP), "--solver", "true", "--out", str(tmp_path / "r"), "--require-api-key"]
+    )
+    assert code == 1
+    assert "credenziale assente" in capsys.readouterr().err
+
+
+def test_api_key_injected_into_solver_only(tmp_path, monkeypatch):
+    """La chiave arriva al sottoprocesso; nei report resta solo il fingerprint."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("AEH_ANTHROPIC_API_KEY", "sk-ant-test-secret")
+    out = tmp_path / "run"
+    leak = tmp_path / "seen.txt"
+    code = main(
+        [
+            "run", str(FX_DEDUP),
+            "--solver", f'printf "%s" "$ANTHROPIC_API_KEY" > {leak}',
+            "--out", str(out),
+            "--require-api-key", "AEH_ANTHROPIC_API_KEY",
+        ]
+    )
+    assert code == 2  # il solver non risolve la fixture: qui conta solo l'env
+    assert leak.read_text() == "sk-ant-test-secret"  # iniettata come ANTHROPIC_API_KEY
+
+    data = json.loads((out / "results.json").read_text())
+    cred = data["solver"]["credential"]
+    assert cred["env_var"] == "AEH_ANTHROPIC_API_KEY"
+    assert cred["injected_as"] == "ANTHROPIC_API_KEY"
+    assert cred["fingerprint"].startswith("sha256:")
+    assert "sk-ant-test-secret" not in (out / "results.json").read_text()
+    assert "sk-ant-test-secret" not in (out / "run_card.md").read_text()
+    assert "ANTHROPIC_API_KEY" not in os.environ  # la shell chiamante non è stata toccata
+
+
+def test_no_credential_recorded_for_builtin_runs(tmp_path):
+    out = tmp_path / "run"
+    main(["run", str(FX_DEDUP), "--ref", "--out", str(out)])
+    assert json.loads((out / "results.json").read_text())["solver"]["credential"] is None
+
+
+def test_agent_cli_solver_without_key_warns(tmp_path, capsys):
+    """Guardia anti-abbonamento: un solver che sembra un agent CLI senza chiave avvisa."""
+    main(["run", str(FX_DEDUP), "--solver", "claude -p x || true", "--out", str(tmp_path / "r")])
+    err = capsys.readouterr().err
+    assert "--require-api-key" in err and "quota di sessione" in err
+
+
+def test_plain_solver_does_not_warn(tmp_path, capsys):
+    main(["run", str(FX_DEDUP), "--solver", "true", "--out", str(tmp_path / "r")])
+    assert "quota di sessione" not in capsys.readouterr().err

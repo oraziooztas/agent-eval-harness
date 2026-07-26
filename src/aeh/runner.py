@@ -7,12 +7,14 @@ and re-checked at grading time.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from aeh.fixture import HIDDEN_PREFIX, Fixture
@@ -20,6 +22,7 @@ from aeh.sandbox import wrap_shell
 
 PROMPT_FILE = "PROMPT.md"
 USAGE_ENV = "AEH_USAGE_FILE"
+API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 _PROMPT_TEMPLATE = """# {title}
 
@@ -42,6 +45,55 @@ class SolverResult:
     duration_seconds: float
     transcript_path: Path
     sandbox: str = "off"  # "off" | backend name (rete negata al solver)
+
+
+@dataclass(frozen=True)
+class Credential:
+    """API key risolta per il solver. Il valore non compare mai nei report né nel repr."""
+
+    env_var: str  # variabile da cui è stata letta
+    value: str = field(repr=False)
+
+    @property
+    def fingerprint(self) -> str:
+        """sha256 troncato: identifica QUALE chiave, senza rivelarla."""
+        return hashlib.sha256(self.value.encode("utf-8")).hexdigest()[:12]
+
+    def to_dict(self) -> dict:
+        return {
+            "env_var": self.env_var,
+            "injected_as": API_KEY_ENV,
+            "fingerprint": f"sha256:{self.fingerprint}",
+            "source": "env",
+        }
+
+    def as_env(self) -> dict[str, str]:
+        return {API_KEY_ENV: self.value}
+
+
+def resolve_api_credential(env_var: str = API_KEY_ENV) -> Credential:
+    """Legge la API key da ``env_var``, o fallisce con un messaggio azionabile.
+
+    Esplicito per costruzione: una run con modello reale deve pagare in dollari
+    tramite una API key, MAI consumare la quota dell'abbonamento Claude Code —
+    sotto abbonamento il costo per token non esiste e ``$AEH_USAGE_FILE`` non
+    può produrre un €/task-risolto onesto.
+    """
+    value = (os.environ.get(env_var) or "").strip()
+    if not value:
+        raise RuntimeError(
+            f"credenziale assente: ${env_var} non è impostata (o è vuota).\n"
+            f"  La API key è cosa diversa dall'abbonamento Claude Code: l'abbonamento NON\n"
+            f"  va usato per gli eval (consuma quota di sessione e non ha costo per token).\n"
+            f"  Chiave su console.anthropic.com → Settings → API keys, poi nella STESSA shell:\n"
+            f"    {env_var}='sk-ant-…' aeh run … --require-api-key {env_var}\n"
+            f"  Nota: ~/.zshrc fa `unset ANTHROPIC_API_KEY` a ogni shell interattiva (guardrail\n"
+            f"  anti-overage di Claude Code): un `export` in un'altra tab non sopravvive.\n"
+            f"  Per non toccare quel guardrail, tieni la chiave in AEH_ANTHROPIC_API_KEY e passa\n"
+            f"  `--require-api-key AEH_ANTHROPIC_API_KEY`: aeh la inietta come {API_KEY_ENV}\n"
+            f"  SOLO nel sottoprocesso del solver."
+        )
+    return Credential(env_var, value)
 
 
 def prepare_workspace(fixture: Fixture, run_dir: str | Path) -> Path:
@@ -88,6 +140,7 @@ def run_solver(
     *,
     net_sandbox_backend: str | None = None,
     usage_file: str | Path | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> SolverResult:
     """Run the solver shell command with cwd=workspace, capturing a transcript.
 
@@ -95,15 +148,20 @@ def run_solver(
     (only for solvers that don't need the network: local models, script bots).
     With ``usage_file`` the solver sees ``AEH_USAGE_FILE`` in the environment
     and can report its own token/cost usage there (see load_usage).
+    With ``extra_env`` (tipicamente ``Credential.as_env()``) le variabili sono
+    iniettate SOLO nel sottoprocesso del solver, senza toccare la shell chiamante.
     """
     tpath = Path(transcript_path).resolve()
     tpath.parent.mkdir(parents=True, exist_ok=True)
     exec_command = command
     if net_sandbox_backend:
         exec_command = wrap_shell(command, net_sandbox_backend)
-    env = None
+    overrides: dict[str, str] = {}
     if usage_file is not None:
-        env = os.environ | {USAGE_ENV: str(Path(usage_file).resolve())}
+        overrides[USAGE_ENV] = str(Path(usage_file).resolve())
+    if extra_env:
+        overrides |= dict(extra_env)
+    env = os.environ | overrides if overrides else None
     start = time.monotonic()
     try:
         proc = subprocess.run(

@@ -11,15 +11,17 @@ agent-eval-harness/
 │   └── adr-001-aeh-e-afb.md   ACCETTATO 19/07: aeh runner, AFB bench, ponte a senso unico
 ├── pyproject.toml             PEP 621, runtime stdlib-only, dev: pytest/pytest-cov/ruff
 ├── .github/workflows/ci.yml   ruff + pytest (gate 80%) + aeh validate fixtures/fx-*
+├── scripts/
+│   └── estimate_cost.py       stima costo a spesa zero: misura il contesto fixture, isola le ipotesi sul loop
 ├── src/aeh/
 │   ├── fixture.py             modello fixture + validazione layout/naming + hash SHA-256
-│   ├── runner.py              workspace agente, solver subprocess (+sandbox opt-in), usage
+│   ├── runner.py              workspace agente, solver subprocess (+sandbox opt-in), usage, credenziale API
 │   ├── grader.py              grading dir pulita (tamper-proof), rete NEGATA di default
 │   ├── sandbox.py             backend net-sandbox: seatbelt (macOS) / unshare-net (Linux)
 │   ├── importer.py            ponte ADR-001: task eseguibili AFB → fixture aeh (holdout, stub, provenance)
 │   ├── report.py              results.json + run_card.md (verdetto, sandbox, usage)
 │   ├── matrix.py              aggregazione N run → matrice per-solver con €/task-risolto
-│   └── cli.py                 aeh validate | run (--label/--price-*/--sandbox-solver) | report | matrix | import-afb
+│   └── cli.py                 aeh validate | run (--label/--price-*/--sandbox-solver/--require-api-key) | report | matrix | import-afb
 ├── fixtures/
 │   ├── fx-001-csv-dedup/      bug: last-wins + case-sensitive
 │   ├── fx-002-slugify/        bug: solo caso banale
@@ -30,6 +32,6 @@ agent-eval-harness/
 └── runs/                      output dei run (gitignored)
 ```
 
-**Invarianti**: (1) hidden mai nel workspace agente; (2) grading su copie intatte, solo gli entry file dell'agente attraversano il confine; (3) SHA-256 del set nascosto in ogni result; (4) il grading esegue codice dell'agente → rete negata quando un backend esiste, e lo stato reale è registrato in `results.json`.
+**Invarianti**: (1) hidden mai nel workspace agente; (2) grading su copie intatte, solo gli entry file dell'agente attraversano il confine; (3) SHA-256 del set nascosto in ogni result; (4) il grading esegue codice dell'agente → rete negata quando un backend esiste, e lo stato reale è registrato in `results.json`; (5) un run a pagamento usa una API key esplicita (`--require-api-key`), mai un fallback silenzioso sull'abbonamento; la chiave non compare in nessun artefatto, solo il suo fingerprint.
 
-**Prossimi passi naturali**: prima matrice cross-model AFB eseguita con `aeh run --label` + `aeh matrix` (output → `evidence/` di AFB citando la versione aeh, come da ADR-001), solver preset per claude/codex CLI, run parallele.
+**Prossimi passi naturali**: la matrice cross-model AFB con modelli reali (path credenziale cablato e validato a costo zero il 26/07 — manca solo la chiave), output → `evidence/` di AFB citando la versione aeh come da ADR-001, solver preset per claude/codex CLI, run parallele.

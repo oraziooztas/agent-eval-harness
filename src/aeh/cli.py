@@ -17,7 +17,18 @@ from aeh.grader import grade
 from aeh.importer import AfbImportError, import_tasks
 from aeh.matrix import write_matrix
 from aeh.report import write_results, write_run_card
-from aeh.runner import apply_reference_solver, load_usage, prepare_workspace, run_solver
+from aeh.runner import (
+    API_KEY_ENV,
+    apply_reference_solver,
+    load_usage,
+    prepare_workspace,
+    resolve_api_credential,
+    run_solver,
+)
+
+#: CLI di agent che parlano con un modello remoto: se girano senza API key esplicita
+#: consumano la quota dell'abbonamento invece di dollari misurabili.
+_AGENT_CLIS = ("claude", "codex", "gemini", "aider", "cursor-agent", "opencode")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,8 +55,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="non negare la rete al grading (default: negata quando un backend esiste)",
     )
-    p_run.add_argument("--price-in", type=float, help="prezzo input EUR per Mtok (per usage)")
-    p_run.add_argument("--price-out", type=float, help="prezzo output EUR per Mtok (per usage)")
+    p_run.add_argument(
+        "--require-api-key",
+        nargs="?",
+        const=API_KEY_ENV,
+        metavar="VAR",
+        help=(
+            f"esige la API key nella variabile VAR (default {API_KEY_ENV}) e la inietta come "
+            f"{API_KEY_ENV} nel solo sottoprocesso del solver; se manca, errore ed exit 1. "
+            "La API key NON è l'abbonamento Claude Code: l'abbonamento consuma quota di "
+            "sessione e non ha costo per token, quindi non produce un €/task onesto"
+        ),
+    )
+    p_run.add_argument(
+        "--price-in", type=float, help="prezzo input per Mtok (moltiplicatore puro: la valuta è la tua)"
+    )
+    p_run.add_argument(
+        "--price-out", type=float, help="prezzo output per Mtok (moltiplicatore puro: la valuta è la tua)"
+    )
     p_run.add_argument(
         "--label",
         help="etichetta del solver nei report (default: il comando); chiave di raggruppamento in matrix",
@@ -103,6 +130,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if solver_backend is None:
             raise RuntimeError("--sandbox-solver richiesto ma nessun backend sandbox su questo host")
 
+    # Credenziale risolta PRIMA di preparare il workspace: se manca, si fallisce
+    # a costo zero invece di scoprirlo a metà run.
+    credential = resolve_api_credential(args.require_api_key) if args.require_api_key else None
+    if credential is None and args.solver and _looks_like_agent_cli(args.solver):
+        print(
+            "aeh: attenzione: il solver sembra un agent CLI ma manca --require-api-key.\n"
+            "  Se gira sull'abbonamento, il run consuma quota di sessione invece di dollari\n"
+            "  e usage/costo restano vuoti (sotto abbonamento il costo per token non esiste).",
+            file=sys.stderr,
+        )
+
     workspace = prepare_workspace(fixture, run_dir)
     solver_result = None
     usage = None
@@ -121,17 +159,32 @@ def _cmd_run(args: argparse.Namespace) -> int:
             run_dir / "transcript.txt",
             net_sandbox_backend=solver_backend,
             usage_file=usage_file,
+            extra_env=credential.as_env() if credential else None,
         )
         usage = load_usage(usage_file, args.price_in, args.price_out)
 
     result = grade(fixture, workspace, run_dir, net_sandbox=not args.no_grading_sandbox)
-    write_results(run_dir, fixture, label, solver_result, result, usage)
+    write_results(
+        run_dir,
+        fixture,
+        label,
+        solver_result,
+        result,
+        usage,
+        credential=credential.to_dict() if credential else None,
+    )
     card = write_run_card(run_dir)
     print(
         f"{fixture.id}: {result.verdict} — public {result.public_passed}/{len(result.public)}, "
         f"hidden {result.hidden_passed}/{len(result.hidden)}\nrun card: {card}"
     )
     return 0 if result.solved else 2
+
+
+def _looks_like_agent_cli(command: str) -> bool:
+    """Euristica: il comando invoca una CLI di agent che parla con un modello remoto?"""
+    first_tokens = command.replace("|", " ").replace(";", " ").replace("&", " ").split()
+    return any(Path(tok).name in _AGENT_CLIS for tok in first_tokens)
 
 
 def _cmd_validate(fixture_paths: list[str]) -> int:

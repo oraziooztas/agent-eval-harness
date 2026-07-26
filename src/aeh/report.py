@@ -18,6 +18,7 @@ def write_results(
     solver_result: SolverResult | None,
     grade_result: GradeResult,
     usage: dict | None = None,
+    credential: dict | None = None,
 ) -> Path:
     run_path = Path(run_dir).resolve()
     payload = {
@@ -34,6 +35,10 @@ def write_results(
             "duration_seconds": round(solver_result.duration_seconds, 2) if solver_result else 0.0,
             "sandbox": solver_result.sandbox if solver_result else "off",
             "usage": usage,
+            # Provenienza della credenziale: quale chiave ha pagato il run (fingerprint,
+            # mai il valore). None = nessuna API key esplicita → run builtin, oppure
+            # solver che gira su credenziali proprie/abbonamento: costo non attribuibile.
+            "credential": credential,
         },
         "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "grade": grade_result.to_dict(),
@@ -77,13 +82,21 @@ def write_run_card(run_dir: str | Path) -> Path:
     else:
         usage_line = ""
 
+    cred = data["solver"].get("credential")
+    cred_line = (
+        f"\n- Credenziale: `${cred['env_var']}` → `{cred['injected_as']}` ({cred['fingerprint']}) "
+        "— API key esplicita, non abbonamento"
+        if cred
+        else ""
+    )
+
     card = f"""# Run card — {data['fixture']['id']}
 
 **Verdetto: {g['verdict']}** · public {g['public']['passed']}/{g['public']['total']} · hidden {g['hidden']['passed']}/{g['hidden']['total']}
 
 - Fixture: {data['fixture']['title']} (taxonomy: {', '.join(data['fixture']['taxonomy']) or 'n/a'})
 - Solver: `{data['solver']['label']}` (status: {data['solver']['status']}, {data['solver']['duration_seconds']}s)
-- Sandbox rete: grading `{g.get('grading_sandbox', 'n/a')}` · solver `{data['solver'].get('sandbox', 'off')}`{usage_line}
+- Sandbox rete: grading `{g.get('grading_sandbox', 'n/a')}` · solver `{data['solver'].get('sandbox', 'off')}`{usage_line}{cred_line}
 - Graded at: {data['graded_at']}
 - Hidden set SHA-256: `{g['hidden_sha256'][:16]}…` (prova di quali check hanno valutato il run)
 {tamper}

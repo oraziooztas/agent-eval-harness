@@ -1,5 +1,97 @@
 # DEVLOG — agent-eval-harness
 
+## 2026-07-26 — credenziale cablata, catena costi validata a spesa zero, stima misurata
+
+Chiusa la preparazione lasciata aperta ieri sera. **Nessun modello reale eseguito, zero speso**: la riga con modelli reali ora è a un comando di distanza, e l'ipotesi da 50k token è stata verificata invece che ereditata.
+
+**Stato credenziale: ASSENTE, e non per caso.** Accertato, non assunto: `ANTHROPIC_API_KEY` non è nell'ambiente, e `~/.zshrc:80` fa `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN` a ogni shell interattiva, con tanto di commento — *"Claude Code — safety: prevent API overage fallback"*. Non è una dimenticanza: è un guardrail deliberato perché Claude Code non sconfini sui crediti API. Conseguenza pratica che vale la pena scrivere: **un `export ANTHROPIC_API_KEY` fatto in un'altra tab non sopravvive**, ogni nuova shell lo cancella.
+
+Quindi il path è stato cablato **rispettando** quel guardrail invece di combatterlo. Nuovo flag `--require-api-key [VAR]` (default `ANTHROPIC_API_KEY`):
+- legge la chiave da `VAR` e la inietta come `ANTHROPIC_API_KEY` **solo nell'env del sottoprocesso solver** — la shell chiamante non viene toccata, il guardrail resta in piedi se la chiave sta in `AEH_ANTHROPIC_API_KEY`;
+- se manca, **exit 1 prima di preparare il workspace**, con un messaggio che dice dove prendere la chiave e perché l'abbonamento non va bene. Mai un fallback silenzioso;
+- `results.json` registra `solver.credential`: variabile d'origine + `sha256` troncato della chiave (**mai il valore**), così si sa quale credenziale ha pagato quale run;
+- guardia aggiuntiva: se il solver *sembra* un agent CLI (`claude`, `codex`, `aider`, …) e `--require-api-key` non c'è, `aeh` avvisa su stderr. Era il modo esatto in cui si sarebbe bruciata quota di sessione credendo di spendere dollari.
+
+**Validato a costo zero (9 run, nessuna API contattata):**
+- floor/ceiling builtin riprodotti identici al 25/07 — `builtin-noop` 0/3 solved, hidden gap **58.3pp**; `builtin-ref` 3/3, **0.0pp**. Il refactor non ha mosso nulla;
+- gate negativo: senza chiave → exit 1, messaggio pieno, `workspace/` **non creato**;
+- catena contabile completa con un **mock solver** (solo `cp` + `printf`, zero rete): credenziale iniettata e vista dal sottoprocesso → `$AEH_USAGE_FILE` → moltiplicatori prezzo → `results.json` → `aeh matrix`. Costo calcolato **0.1557** contro 0.1557 atteso a mano su 49.840 in / 5.600 out a 2/10 per Mtok. Matrice a 9 run: riga mock 3/3 solved, **0.473 costo totale**, **0.1577 per task risolto**;
+- chiave finta cercata in `results.json`, `run_card.md`, `transcript.txt`: **non trapela in nessuno dei tre**;
+- 76 pytest (6 nuovi sulla credenziale), ruff clean.
+
+**La stima ora è misurata — e il misurato ribalta la composizione dell'ipotesi.** `scripts/estimate_cost.py` (stdlib-only, cross-check `tiktoken` o200k_base se già installato, mai come dipendenza) prepara i workspace veri e conta il contesto che l'agente può leggere:
+
+| fixture | file | char | tok (chars/4) | tok (BPE) | scarto |
+|---|---:|---:|---:|---:|---:|
+| `afb-v0-002` | 5 | 2.019 | 505 | 500 | +1,0% |
+| `afb-v0-006` | 9 | 3.123 | 781 | 709 | +10,2% |
+| `afb-v0-009` | 5 | 2.393 | 598 | 553 | +8,1% |
+
+**628 token/task di media: l'1,3% dei 50k assunti.** Le fixture non fanno il costo. Lo fanno lo scaffold dell'agente (system prompt + schemi dei tool, rispediti a ogni turno) e il numero di turni — roba che vive nell'agent CLI, non in questo repo, e che **nessuna misura statica può chiudere**. Il metodo di conteggio è dichiarato: `chars/4`, che sul nostro materiale sovrastima il BPE dell'1-10%.
+
+Il costo quindi resta un'ipotesi *parametrica*, ma esplicita. Tre scenari sul loop (turni · scaffold · crescita · output, caching sì/no), matrice a 3 modelli × 3 fixture, **colonna in USD** (Haiku 4.5 `1/5` + Sonnet 5 promo `2/10` + Opus 5 `5/25`):
+
+| scenario | ipotesi | USD totali |
+|---|---|---:|
+| lean | 5 turni, scaffold 8k, caching | **0,81** |
+| base | 8 turni, scaffold 12k, caching | **1,89** |
+| heavy | 15 turni, scaffold 18k, no caching | **11,35** |
+
+Nota di onestà sull'ipotesi di ieri: allo scenario *base* il modello dà ~50k input/task, cioè **l'ipotesi 50k era ben calibrata** — sbagliata era solo la sua composizione (non le fixture, lo scaffold). E la lettura decisionale non cambia: fra magro e grasso ballano 14×, ma il tetto è ~11 USD. **Non serve una stima migliore per decidere**; serve il primo run strumentato per sostituirla con una misura. Il rischio vero non è mai stato l'importo: era lanciare 9 run e scoprire dopo che pagava l'abbonamento — ed è esattamente ciò che ora il codice impedisce.
+
+**Comando pronto** (una fixture, Haiku, il più economico: serve a *misurare*, non a valutare):
+
+```bash
+AEH_ANTHROPIC_API_KEY='sk-ant-…' aeh run fixtures/afb-v0-002 \
+  --solver 'claude -p "$(cat PROMPT.md)" --permission-mode acceptEdits --model haiku' \
+  --require-api-key AEH_ANTHROPIC_API_KEY \
+  --label 'haiku-4.5' --price-in 1 --price-out 5
+```
+
+(`--model haiku` è l'alias: `claude --help` documenta il meccanismo con esempi `opus`/`sonnet`/`fable` e nomi pieni tipo `claude-fable-5`, senza elencare l'alias Haiku — non l'ho verificato a fonte, e un ID sbagliato fallisce a costo zero. Il modello va scelto lì e **non** va cambiato senza cambiare anche `--price-in/--price-out`, che non lo sanno da soli.)
+
+Poi si legge `runs/…/results.json` → `solver.usage`: se `tokens_in` è nell'ordine dei 50k l'ipotesi tiene e si lanciano le 8 righe restanti; se è 5k o 500k, si ricalcola prima di spendere. `aeh matrix` va poi chiamato includendo **anche** i 6 run builtin, o i numeri dei modelli restano senza scala.
+
+📌 Restano validi i due finding del 25/07, riconfermati oggi dai run: **mai riportare il public pass rate** su queste 3 fixture (costante 100%, anche con `--noop`), e su `afb-v0-002` fra noop e ref balla **un solo hidden check** (3/4 → 4/4), range troppo stretto per separare modelli vicini.
+📌 `--price-in/--price-out` restano moltiplicatori puri: passando USD, il campo si chiama `cost_eur` ma contiene dollari. Ora è scritto anche nel README e nell'help della CLI.
+
+## 2026-07-25 (sera) — la riga con modelli reali: il gate non è il denaro, è la credenziale
+
+Preparazione della decisione di spesa lasciata aperta stamattina. **Nessun modello reale eseguito**, nessun euro speso: qui c'è solo il conto fatto prima, così la decisione è un sì/no e non una ricerca.
+
+**Prezzi verificati alla fonte oggi** (`platform.claude.com/docs/en/about-claude/pricing`, non a memoria), USD per Mtok, input/output:
+Haiku 4.5 `1 / 5` · Sonnet 5 `2 / 10` (promo fino al **31/08/2026**, poi `3 / 15`) · Opus 5 `5 / 25` · Fable 5 `10 / 50`. Batch API = **-50%** su entrambi.
+
+**Stima per una matrice a 3 modelli × 3 fixture AFB.** Ipotesi dichiarata, non misurata: ~50k token di input e ~8k di output per task risolto da un agente di coding (le fixture sono piccole, il costo lo fa il loop di iterazione).
+
+| Solver | USD/task | 3 fixture | Cosa compra |
+|---|---|---|---|
+| Haiku 4.5 | ~0,09 | ~**0,27** | il floor realistico: se sta vicino a noop (58,3pp) sai che la fixture discrimina |
+| Sonnet 5 | ~0,18 | ~**0,55** | il caso d'uso vero, e la promo scade il 31/08 |
+| Opus 5 | ~0,45 | ~**1,35** | il ceiling di mercato contro `builtin-ref` (0,0pp) |
+| **totale** | | **~2,2 USD** | matrice completa a 5 righe con floor e ceiling builtin |
+
+⚠️ **Il numero sopra ribalta la premessa.** Questa riga è stata trattata per settimane come una spesa da decidere: costa **circa due dollari**. Il vero gate è un altro.
+
+**Il gate vero: quale credenziale usa il solver.** Il comando d'esempio del README è `claude -p "$(cat PROMPT.md)" --permission-mode acceptEdits`. Se `claude` gira sull'abbonamento, quei run **non costano dollari, consumano la tua quota di sessione** — che è la risorsa scarsa davvero (due session limit colpiti il 10/07). Con `ANTHROPIC_API_KEY` invece paghi i ~2 USD sopra e la quota resta intatta.
+👉 Decisione da prendere: **API key dedicata per i run di eval**. È anche l'unica strada in cui `$AEH_USAGE_FILE` produce un €/task-risolto onesto, perché sotto abbonamento il costo per token semplicemente non esiste.
+
+**Sequenza consigliata (non eseguita, aspetta il tuo via):**
+1. **Una riga sola, Haiku, una fixture** — non per il risultato ma per *misurare* i token veri e sostituire la mia ipotesi da 50k/8k con un numero.
+2. Ricalcolare la tabella con i token misurati. Se l'ordine di grandezza tiene, lanciare le 8 righe restanti in un colpo.
+3. `aeh matrix` includendo **anche** i due run builtin: senza floor e ceiling nella stessa tabella i numeri dei modelli non hanno scala.
+
+```bash
+export ANTHROPIC_API_KEY=…                       # NON l'abbonamento
+aeh run fixtures/afb-v0-002 \
+  --solver 'claude -p "$(cat PROMPT.md)" --permission-mode acceptEdits' \
+  --label 'haiku-4.5' --price-in 1 --price-out 5
+# ripetere su afb-v0-006 e afb-v0-009, poi per ogni modello, poi:
+aeh matrix runs/ --out runs/matrix-afb-models
+```
+📌 `--price-in/--price-out` sono moltiplicatori puri: passando i prezzi in USD la colonna dice "EUR" ma i numeri sono dollari. O converti tu al cambio del giorno, o leggi quella colonna come USD.
+📌 Ricorda il finding di stamattina: su queste 3 fixture **non riportare mai il public pass rate** (costante al 100%), e su `afb-v0-002` fra noop e ref ballano 3/4 → 4/4, cioè un solo hidden check: troppo stretta per separare modelli vicini.
+
 ## 2026-07-25 — prima matrice AFB: calibrata sui builtin, non sui modelli (AFK)
 
 - Backlog AFK-queue "prima matrice cross-model AFB eseguita con aeh": eseguita, ma **deliberatamente senza solver a pagamento**. Prima di misurare un modello serve sapere dove stanno pavimento e soffitto dello strumento, e quelli costano zero: `--ref` e `--noop` su tutte e 3 le fixture AFB, 6 run, poi `aeh matrix`.

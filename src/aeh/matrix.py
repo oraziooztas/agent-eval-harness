@@ -80,8 +80,10 @@ def write_matrix(run_dirs: list[str | Path], out_dir: str | Path) -> Path:
     lines = [
         "# Matrice cross-solver",
         "",
-        f"Run aggregati: {data['runs_total']}. Il costo è solver-reported "
-        "(vedi README): righe senza usage completa non hanno €/solved.",
+        (
+            f"Run aggregati: {data['runs_total']}. Il costo è solver-reported "
+            "(vedi README): righe senza usage completa non hanno €/solved."
+        ),
         "",
         "| solver | run | solved | solve rate | hidden gap (pp) | latenza mediana | costo tot | €/task risolto |",
         "|---|---|---|---|---|---|---|---|",

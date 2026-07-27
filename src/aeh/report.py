@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aeh.fixture import Fixture
@@ -35,7 +35,7 @@ def write_results(
             "sandbox": solver_result.sandbox if solver_result else "off",
             "usage": usage,
         },
-        "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "graded_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "grade": grade_result.to_dict(),
     }
     out = run_path / "results.json"

@@ -66,7 +66,8 @@ def test_backend_detection(monkeypatch):
 @pytest.mark.skipif(sandbox.backend() is None, reason="nessun backend sandbox su questo host")
 def test_network_denied_for_real():
     plain = subprocess.run(
-        [sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=30
+        [sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=30,
+        check=False,
     )
     assert plain.returncode == 0
     rc_plain = int(plain.stdout.strip())
@@ -79,6 +80,7 @@ def test_network_denied_for_real():
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     if wrapped.returncode != 0:
         pytest.skip(f"backend {backend} non eseguibile qui: {wrapped.stderr[:200]}")

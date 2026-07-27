@@ -168,6 +168,7 @@ def grade(
             text=True,
             timeout=max(60, fixture.timeout_seconds),
             env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"},
+            check=False,  # the exit code IS the result: a failing test suite is not an error here
         )
 
     try:

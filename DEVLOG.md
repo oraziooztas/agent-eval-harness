@@ -1,5 +1,52 @@
 # DEVLOG — agent-eval-harness
 
+## 2026-07-27 — `uv.lock` deciso (ignorato) + 🔴 `main` divergente da `origin/main`
+
+**`uv.lock` → gitignorato, e la ragione è specifica di questo repo.** Era
+untracked da giorni, quindi né tracciato né ignorato: limbo. Il gemello
+`sae-early-warning` **lo traccia**, e fa bene: la sua CI gira `uv sync --dev`, il
+lock la rende riproducibile. Qui la CI fa `pip install -e ".[dev]"` e **non usa
+uv**, e il runtime dichiara `dependencies = []` → il lock fisserebbe solo il
+toolchain di dev locale, con **zero** effetto sulla riproducibilità del progetto,
+aggiungendo churn su un repo pubblico. I due repo divergono perché divergono le
+CI, non per incoerenza.
+
+**🔴 Il problema vero, che non era nel backlog.** `main` locale e `origin/main`
+sono **divergenti**: 1 commit per parte, base comune `811e3ee`.
+- remoto: `e101681` *docs: translate README to English (**#1**)* — 20/07, merged
+  **via PR su GitHub** e mai tirato in locale;
+- locale: `279bceb` *docs: record the AFB calibration matrix* — 25/07, committato
+  sulla base vecchia.
+
+Il branch `feat/api-credential-and-cost-estimate` (1 commit, `30cf865`) **non ha
+upstream** e parte da quel `main` stantio. Un `git push` naïf viene rifiutato; il
+rischio serio è "risolverlo" con un force-push che seppellisce la PR #1 già
+merged.
+
+**Predetto senza toccare nulla** (`git merge-tree --write-tree`, dry-run):
+- `main` → `origin/main`: **CLEAN** (il locale toccava solo `DEVLOG.md`, il
+  remoto solo `README.md`);
+- `feat/…` → `origin/main`: **CONFLITTO su `README.md`**, atteso — il remoto ha
+  riscritto tutto il README in inglese (56+/55-) e il branch ci aggiunge 37 righe
+  sopra la versione precedente.
+
+**✅ Risolto nella stessa sessione, su conferma esplicita di Orazio.** Ref di
+backup creati prima di toccare qualsiasi cosa
+(`backup/main-pre-rebase-2026-07-27`, `backup/feat-pre-rebase-2026-07-27`), poi:
+1. `main` rebasato su `origin/main` — clean come previsto, `279bceb` → `6864d23`;
+   70 pytest verdi; pushato. **La PR #1 non è stata seppellita**: nessun
+   force-push, `e101681` resta nella storia.
+2. Branch feature rebasato su `main` — conflitto su `README.md`, previsto.
+   **Risolto tenendo l'inglese e traducendo le aggiunte**: il branch scriveva le
+   due sezioni nuove (`Credential: API key, not subscription` + revisione di
+   `Cost per solved task`) in italiano, sopra il README pre-traduzione. Mergiarle
+   così avrebbe reso bilingue il README pubblico, vanificando la PR #1.
+   Verificato a posteriori: 0 marker di conflitto, 0 residui italiani.
+
+Storia ora lineare: `e101681` → `6864d23` → `b4ff49b` → `062ef96`.
+**Verificato dopo il rebase** (non solo che git fosse contento): 76 pytest PASS,
+coverage **94,74%** contro il gate 80%, `ruff check .` pulito.
+
 ## 2026-07-26 — credenziale cablata, catena costi validata a spesa zero, stima misurata
 
 Chiusa la preparazione lasciata aperta ieri sera. **Nessun modello reale eseguito, zero speso**: la riga con modelli reali ora è a un comando di distanza, e l'ipotesi da 50k token è stata verificata invece che ereditata.

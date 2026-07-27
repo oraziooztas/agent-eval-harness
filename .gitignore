@@ -11,3 +11,9 @@ runs/
 fixtures/afb-*/
 # state bus interno di sessione (path locali)
 .pipeline/
+# uv.lock NON tracciato in questo repo (a differenza di sae-early-warning, dove
+# la CI gira `uv sync --dev` e quindi il lock la rende riproducibile). Qui la CI
+# fa `pip install -e ".[dev]"` e non usa uv, e il runtime ha `dependencies = []`:
+# il lock fisserebbe solo il toolchain di dev locale, senza alcun effetto sulla
+# riproducibilita' del progetto. Committarlo aggiunge solo churn.
+uv.lock

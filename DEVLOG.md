@@ -43,9 +43,44 @@ backup creati prima di toccare qualsiasi cosa
    così avrebbe reso bilingue il README pubblico, vanificando la PR #1.
    Verificato a posteriori: 0 marker di conflitto, 0 residui italiani.
 
-Storia ora lineare: `e101681` → `6864d23` → `b4ff49b` → `062ef96`.
-**Verificato dopo il rebase** (non solo che git fosse contento): 76 pytest PASS,
-coverage **94,74%** contro il gate 80%, `ruff check .` pulito.
+Storia ora lineare: `e101681` → `6864d23` → `b4ff49b` → `4fa379d`.
+
+**🔴 Il push ha scoperto una CI rossa pre-esistente, e la causa è un linter non
+pinnato.** Dopo il push la CI falliva su **entrambi** i branch — incluso `main`,
+su un commit **solo-docs**. Non l'ha rotta il rebase: `ruff>=0.5` senza upper
+bound fa installare alla CI sempre l'ultima, e la **0.16.0 (uscita di recente) ha
+allargato il set di regole di default** (`PLW1510`, `UP017`, `BLE001`, `ISC004`,
+`TRY004`, `FURB188`). In locale il venv aveva la **0.15.21** → `ruff check src
+tests` diceva "All checks passed", la CI trovava **11 errori** sullo stesso
+codice. I file colpiti (`tests/test_sandbox.py`, `report.py`, `importer.py`) sono
+del 17-20/07: il guasto era latente e `279bceb`, mai pushato, non aveva mai
+girato in CI.
+
+Sistemato in due mosse, non una:
+- **Causa**: `ruff>=0.16,<0.17` nell'extra `dev`. Un linter non vincolato rende il
+  lint non riproducibile e può far diventare rosso un repo senza toccare una riga
+  — inaccettabile qui, dove la riproducibilità è il prodotto. Alzare il bound ora
+  è una scelta esplicita.
+- **Sintomi**: 11 → 0. `check=False` esplicito sui 4 `subprocess.run` (era già il
+  default: comportamento **identico**, ora dichiarato, e il commento dice perché —
+  un exit code non-zero *è* il risultato, non un errore); `datetime.UTC`;
+  `PackageNotFoundError` al posto di `except Exception`; concatenazione di stringhe
+  parentesizzata in `matrix.py`.
+- **Su `TRY004` ruff ha torto e l'ho tenuto zittito con motivazione**: quel
+  `ValueError` in `runner.py` è deliberatamente dentro la tupla dell'`except` due
+  righe sotto, che lo converte in un dict di errore soft. Alzare `TypeError` come
+  suggerito lo farebbe **sfuggire e crashare**. `# noqa: TRY004` con il perché
+  scritto accanto.
+
+Verificato con la **0.16.0 installata in locale** (cioè la stessa della CI, non
+quella che avevo): `ruff check src tests` pulito, 76 pytest, coverage 94,74%
+contro il gate 80%.
+
+**Lezione di metodo, costata un push rosso**: avevo verificato con `ruff check .`,
+la CI gira `ruff check src tests` — e soprattutto con una **versione diversa**.
+Verificare "il progetto è pulito" non è verificare "la CI passerà": vale il
+comando esatto della CI, con le versioni della CI. Il pin di ruff è ciò che rende
+questa frase vera anche domani.
 
 ## 2026-07-26 — credenziale cablata, catena costi validata a spesa zero, stima misurata
 

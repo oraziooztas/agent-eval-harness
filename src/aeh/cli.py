@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aeh import sandbox
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     fixture = Fixture.load(args.fixture)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_dir = Path(args.out) if args.out else Path("runs") / f"{fixture.id}-{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aeh.fixture import Fixture
@@ -40,7 +40,7 @@ def write_results(
             # solver che gira su credenziali proprie/abbonamento: costo non attribuibile.
             "credential": credential,
         },
-        "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "graded_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "grade": grade_result.to_dict(),
     }
     out = run_path / "results.json"

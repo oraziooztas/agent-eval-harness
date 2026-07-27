@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aeh.fixture import HIDDEN_PREFIX, PUBLIC_PREFIX, Fixture
@@ -168,7 +168,7 @@ def import_task(
             "suite_version": str(task.get("suite_version", "")),
             "afb_task_id": task_id,
             "imported_with": f"aeh {_aeh_version()}",
-            "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "imported_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "disclosed_example": True,
             "hidden_tests_origin": hidden_origin,
             "seed_stubs": stubs,
@@ -322,7 +322,7 @@ def _prefixed_name(name: str, prefix: str) -> str:
         return name
     if name.startswith("test_"):
         return f"{prefix}_{name[len('test_'):]}"
-    stem = name[: -len(".py")] if name.endswith(".py") else name
+    stem = name.removesuffix(".py")
     return f"{prefix}_{stem}.py"
 
 
@@ -332,8 +332,8 @@ def _is_junk(path: Path) -> bool:
 
 def _aeh_version() -> str:
     try:
-        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError, version
 
         return version("agent-eval-harness")
-    except Exception:  # pragma: no cover - solo fuori da un install
+    except PackageNotFoundError:  # pragma: no cover - solo fuori da un install
         return "dev"

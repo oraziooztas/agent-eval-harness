@@ -172,6 +172,7 @@ def run_solver(
             text=True,
             timeout=timeout_seconds,
             env=env,
+            check=False,  # a non-zero solver is a normal outcome, recorded not raised
         )
         status = "ok" if proc.returncode == 0 else "error"
         returncode: int | None = proc.returncode
@@ -208,7 +209,9 @@ def load_usage(
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise ValueError("usage non è un oggetto JSON")
+
+            # turned into a soft error dict. TypeError would escape it and crash.
+            raise ValueError("usage non è un oggetto JSON")  # noqa: TRY004
     except (json.JSONDecodeError, ValueError) as exc:
         return {"error": f"usage file non parsabile: {exc}", "source": "solver-reported"}
 

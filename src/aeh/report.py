@@ -79,7 +79,7 @@ def write_run_card(run_dir: str | Path) -> Path:
 
     card = f"""# Run card — {data['fixture']['id']}
 
-**Verdetto: {g['verdict']}** · public {g['public']['passed']}/{g['public']['total']} · hidden {g['hidden']['passed']}/{g['hidden']['total']}
+**Verdetto: {g['verdict']}** · hidden {g['hidden']['passed']}/{g['hidden']['total']} (segnale di grading) · public {g['public']['passed']}/{g['public']['total']} (regression guard)
 
 - Fixture: {data['fixture']['title']} (taxonomy: {', '.join(data['fixture']['taxonomy']) or 'n/a'})
 - Solver: `{data['solver']['label']}` (status: {data['solver']['status']}, {data['solver']['duration_seconds']}s)
@@ -88,6 +88,10 @@ def write_run_card(run_dir: str | Path) -> Path:
 - Hidden set SHA-256: `{g['hidden_sha256'][:16]}…` (prova di quali check hanno valutato il run)
 {tamper}
 ## Test pubblici (visti dall'agente)
+
+> Passano già sul seed intatto — `aeh validate` fallisce la fixture se non lo fanno.
+> Sono un regression guard, **non** un segnale di soluzione: un solver che non tocca
+> nulla li vede tutti verdi. Il segnale sta interamente nei nascosti.
 
 {table(g['public'])}
 

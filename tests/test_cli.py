@@ -29,6 +29,28 @@ def test_run_noop_exit_2(tmp_path, capsys):
     assert data["solver"]["label"] == "builtin:noop"
 
 
+def test_summary_leads_with_hidden_and_labels_public(tmp_path, capsys):
+    """Il public non è un segnale di soluzione: non può stare in testa (docs/METRICS.md).
+
+    Regressione reale: un `--noop` passa tutti i public e nel vecchio summary
+    apriva con quel numero verde su una run che non ha risolto niente.
+    """
+    code = main(["run", str(FX_SLUG), "--noop", "--out", str(tmp_path / "run")])
+    assert code == 2
+    first_line = capsys.readouterr().out.splitlines()[0]
+    assert "hidden" in first_line
+    assert "public" not in first_line
+
+
+def test_run_card_leads_with_hidden_and_frames_public(tmp_path):
+    out = tmp_path / "run"
+    main(["run", str(FX_SLUG), "--noop", "--out", str(out)])
+    card = (out / "run_card.md").read_text()
+    headline = next(ln for ln in card.splitlines() if ln.startswith("**Verdetto"))
+    assert headline.index("hidden") < headline.index("public")
+    assert "regression guard" in card
+
+
 def test_run_shell_solver(tmp_path):
     out = tmp_path / "run"
     ref = FX_SLUG / "reference" / "slugify.py"

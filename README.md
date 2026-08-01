@@ -53,7 +53,7 @@ Exit codes: `0` solved · `1` harness/contract error · `2` valid run but not so
 
 ## What it measures (and what it doesn't)
 
-- Measures: the agent's ability to solve the REAL contract of the task, not just the tests it sees. The gap between public-pass and hidden-pass is the interesting signal (overfitting to the visible tests).
+- Measures: the agent's ability to solve the REAL contract of the task, not just the tests it sees. **Solve rate is the signal.** The public pass rate is not: a valid fixture is green on the public suite *before the agent starts* (`aeh validate` enforces it), so a do-nothing solver scores full marks there — it is a regression guard, never evidence of a solution. The public-vs-hidden gap is informative only when read against the floor a `--noop` run produces on the same fixtures. Full rules: [docs/METRICS.md](docs/METRICS.md).
 - `tamper_suspect`: files named like hidden tests, created by the agent in the workspace, are flagged in the run card (grading stays valid either way).
 - Does not (yet): filesystem confinement of the solver (it runs as your user, so use an agent CLI you trust), multi-language support (fixture tests are Python `unittest`), run parallelism.
 
@@ -78,7 +78,10 @@ provenance is always marked `solver-reported`: it is data from the process under
 evaluation, not a proof. `aeh matrix` aggregates N runs per label (`--label`) and
 reports, for each solver, solve rate, hidden gap, median latency and
 **EUR/solved-task** (only when ALL of the solver's runs carry a cost: no invented
-averages on partial data).
+averages on partial data). Include a `--noop` and a `--ref` run over the same
+fixtures in the same matrix: they are tagged as floor and ceiling, every row gets
+its distance from that floor, and without a floor run the matrix warns instead of
+printing a hidden gap with no scale ([docs/METRICS.md](docs/METRICS.md)).
 
 ## AFB bridge (`aeh import-afb`)
 

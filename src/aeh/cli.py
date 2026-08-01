@@ -127,9 +127,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     result = grade(fixture, workspace, run_dir, net_sandbox=not args.no_grading_sandbox)
     write_results(run_dir, fixture, label, solver_result, result, usage)
     card = write_run_card(run_dir)
+    # Il grading è nei soli hidden: i public passano già sul seed intatto (è
+    # l'invariante che `aeh validate` impone), quindi in testa al summary
+    # sarebbero un segnale falso. Restano, etichettati per quello che sono.
     print(
-        f"{fixture.id}: {result.verdict} — public {result.public_passed}/{len(result.public)}, "
-        f"hidden {result.hidden_passed}/{len(result.hidden)}\nrun card: {card}"
+        f"{fixture.id}: {result.verdict} — hidden {result.hidden_passed}/{len(result.hidden)}\n"
+        f"  public {result.public_passed}/{len(result.public)} "
+        "(regression guard, non un segnale di soluzione)\n"
+        f"run card: {card}"
     )
     return 0 if result.solved else 2
 

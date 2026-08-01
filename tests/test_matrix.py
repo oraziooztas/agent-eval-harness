@@ -85,6 +85,66 @@ def test_matrix_missing_results(tmp_path):
         build_matrix([tmp_path / "vuota"])
 
 
+# ---------- Calibrazione: floor e ceiling (docs/METRICS.md) ----------
+
+def test_calibration_tags_builtin_rows_and_measures_distance(tmp_path):
+    """Il floor esce dai run della matrice, non da una costante."""
+    _fake_run(tmp_path / "floor", "builtin:noop", solved=False, hidden_passed=0)
+    _fake_run(tmp_path / "ceil", "builtin:ref", solved=True, hidden_passed=2)
+    _fake_run(tmp_path / "a", "agent-a", solved=False, hidden_passed=1)
+    data = build_matrix([tmp_path / "floor", tmp_path / "ceil", tmp_path / "a"])
+
+    cal = data["calibration"]
+    assert cal["floor"]["solver"] == "builtin:noop"
+    assert cal["floor"]["hidden_gap_pp"] == 100.0  # public 2/2, hidden 0/2
+    assert cal["ceiling"]["hidden_gap_pp"] == 0.0
+    assert cal["warnings"] == []
+
+    rows = {r["solver"]: r for r in data["solvers"]}
+    assert rows["builtin:noop"]["role"] == "floor"
+    assert rows["builtin:ref"]["role"] == "ceiling"
+    assert rows["agent-a"]["role"] is None
+    # hidden 1/2 → gap 50pp, cioè 50pp meglio del pavimento
+    assert rows["agent-a"]["gap_vs_floor_pp"] == -50.0
+    assert rows["builtin:noop"]["gap_vs_floor_pp"] == 0.0
+
+
+def test_solver_at_the_floor_is_visible_as_such(tmp_path):
+    """Un solver che non risolve nulla ha i public verdi ma gap_vs_floor ≈ 0."""
+    _fake_run(tmp_path / "floor", "builtin:noop", solved=False, hidden_passed=0)
+    _fake_run(tmp_path / "a", "agent-inutile", solved=False, hidden_passed=0)
+    rows = {r["solver"]: r for r in build_matrix([tmp_path / "floor", tmp_path / "a"])["solvers"]}
+    assert rows["agent-inutile"]["gap_vs_floor_pp"] == 0.0
+
+
+def test_missing_floor_warns_instead_of_printing_a_bare_gap(tmp_path):
+    _fake_run(tmp_path / "a", "agent-a", solved=False, hidden_passed=1)
+    data = build_matrix([tmp_path / "a"])
+
+    assert data["calibration"]["floor"] is None
+    assert data["solvers"][0]["hidden_gap_pp"] == 50.0
+    assert data["solvers"][0]["gap_vs_floor_pp"] is None  # nessuna scala → nessun numero
+    assert any("builtin:noop" in w for w in data["calibration"]["warnings"])
+    assert any("builtin:ref" in w for w in data["calibration"]["warnings"])
+
+
+def test_matrix_md_reports_floor_and_never_leads_with_public(tmp_path):
+    _fake_run(tmp_path / "floor", "builtin:noop", solved=False, hidden_passed=0)
+    _fake_run(tmp_path / "a", "agent-a", solved=True, hidden_passed=2)
+    text = write_matrix([tmp_path / "floor", tmp_path / "a"], tmp_path / "out").read_text()
+
+    assert "Floor misurato" in text and "floor" in text
+    header = next(ln for ln in text.splitlines() if ln.startswith("| solver |"))
+    assert "vs floor" in header
+    assert "public" not in header.lower()  # regressione: il public non torna in tabella
+
+
+def test_matrix_md_carries_the_warning_when_uncalibrated(tmp_path):
+    _fake_run(tmp_path / "a", "agent-a", solved=True)
+    text = write_matrix([tmp_path / "a"], tmp_path / "out").read_text()
+    assert "⚠️" in text and "--noop" in text
+
+
 def test_write_matrix_files(tmp_path):
     _fake_run(tmp_path / "r1", "agent-a", solved=True, cost=0.5)
     md = write_matrix([tmp_path / "r1"], tmp_path / "out")

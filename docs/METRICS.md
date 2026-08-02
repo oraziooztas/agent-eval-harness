@@ -60,24 +60,29 @@ aeh matrix runs/floor runs/ceiling runs/<model> --out runs/matrix
 
 ## 4. The measured AFB calibration (scope-limited)
 
-From the calibration matrix of 2026-07-25, over the three **disclosed** AFB
+From the calibration matrix of 2026-08-02, over the three **disclosed** AFB
 fixtures (`afb-v0-002`, `afb-v0-006`, `afb-v0-009`):
 
 | run | solved | solve rate | hidden gap |
 |---|---|---|---|
 | `builtin:ref` | 3/3 | 100% | 0.0 pp |
-| `builtin:noop` | 0/3 | 0% | 58.3 pp |
+| `builtin:noop` | 0/3 | 0% | 66.7 pp |
+
+Per fixture the floor is 50.0 pp on `afb-v0-002` and 75.0 pp on both
+`afb-v0-006` and `afb-v0-009`. Public suites stay green under `--noop` in all
+three cases (4/4, 2/2, 3/3), which is invariant 1 holding, not a gap.
 
 These two numbers bound any real run **on that fixture set only**. They are not
 constants of the harness and are deliberately not hardcoded anywhere in `src/`:
 a floor measured on one set of fixtures does not transfer to another, and a
 hardcoded one would travel silently. Recompute it per fixture set.
 
-Narrower caveat on `afb-v0-002`: between noop and ref only a single hidden check
-changed, so that fixture cannot separate solvers that are close together. AFB
-added two more discriminating hidden checks on 2026-08-01 (1/4 → 3/6), which
-changes this figure — the table above is the state as measured on 07-25 and
-should be re-run before being cited again.
+The floor moves when the hidden suites change, and it already has: it read
+58.3 pp on the 2026-07-25 matrix, when `afb-v0-002` separated noop from ref on a
+single hidden check. AFB added two more discriminating checks on 2026-08-01,
+taking that fixture from 1/4 to 3/6 and the aggregate floor from 58.3 to
+66.7 pp. Treat any quoted floor as valid only for a stated fixture set at a
+stated date, and re-run the two builtins after touching a hidden suite.
 
 ## 5. What these numbers are not
 

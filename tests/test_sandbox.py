@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from aeh import sandbox
+from aeh import grader, sandbox
 from aeh.fixture import Fixture
 from aeh.grader import grade
 from aeh.runner import prepare_workspace, run_solver
@@ -141,3 +141,43 @@ def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     result = grade(fx, ws, tmp_path)
     assert result.grading_sandbox == "fallback-off:seatbelt"
     assert result.public  # il grading è comunque avvenuto
+
+
+def test_grading_records_unavailable_deterministically(tmp_path, monkeypatch):
+    """Stesso stato di 'nessun backend', ma forzato: non dipende dall'host che esegue la CI."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+    assert result.public  # il grading avviene comunque, solo non sandboxato
+
+
+def test_grading_propagates_oserror_without_backend(tmp_path, monkeypatch):
+    """Senza sandbox, un runner che non parte proprio (OSError) non va inghiottito."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+
+    def _boom(*a, **kw):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr(grader.subprocess, "run", _boom)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(OSError, match="non eseguibile"):
+        grade(fx, ws, tmp_path)
+
+
+def test_grading_raises_when_runner_produces_no_output(tmp_path, monkeypatch):
+    """Il runner 'riesce' (rc qualsiasi) ma non scrive risultati: errore chiaro, non un crash muto."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+
+    class _FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "il test runner è esploso prima di scrivere output\n"
+
+    monkeypatch.setattr(grader.subprocess, "run", lambda *a, **kw: _FakeProc())
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(RuntimeError, match="non ha prodotto risultati"):
+        grade(fx, ws, tmp_path)

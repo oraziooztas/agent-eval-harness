@@ -16,7 +16,7 @@ from pathlib import Path
 
 from aeh import sandbox
 from aeh.fixture import HIDDEN_PREFIX, PUBLIC_PREFIX, Fixture
-from aeh.runner import find_hidden_leaks
+from aeh.runner import _copy_tree_contents, find_hidden_leaks
 
 _TESTRUN_SCRIPT = '''\
 import io
@@ -131,11 +131,7 @@ def grade(
     grading.mkdir(parents=True)
 
     # Pristine seed as base, agent entry files on top (missing file = seed stays).
-    for item in sorted((fixture.root / "seed").iterdir()):
-        if item.is_dir():
-            shutil.copytree(item, grading / item.name)
-        else:
-            shutil.copy2(item, grading / item.name)
+    _copy_tree_contents(fixture.root / "seed", grading)
     for name in fixture.entry_files:
         candidate = ws / name
         if candidate.is_file():

@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+from aeh import cli as cli_mod
 from aeh.cli import main
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -98,3 +99,13 @@ def test_error_on_missing_fixture(capsys):
     code = main(["run", "/nonexistent/fixture", "--noop"])
     assert code == 1
     assert "errore" in capsys.readouterr().err
+
+
+def test_sandbox_solver_without_backend_is_a_clean_error(tmp_path, capsys, monkeypatch):
+    """--sandbox-solver senza backend disponibile è un errore dichiarato, non un run silenzioso."""
+    monkeypatch.setattr(cli_mod.sandbox, "backend", lambda: None)
+    code = main(
+        ["run", str(FX_DEDUP), "--noop", "--sandbox-solver", "--out", str(tmp_path / "run")]
+    )
+    assert code == 1
+    assert "sandbox" in capsys.readouterr().err

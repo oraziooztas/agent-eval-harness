@@ -7,12 +7,20 @@ import pytest
 
 from aeh.cli import main
 from aeh.fixture import Fixture
-from aeh.importer import AfbImportError, _prefixed_name, import_tasks
+from aeh.importer import AfbImportError, _empty_like, _prefixed_name, import_tasks
 
 TASK_ID = "afb-v0-042"
 
 
-def _make_afb(root: Path, *, with_holdout: bool = True, holdout_at: Path | None = None) -> Path:
+def _make_afb(
+    root: Path,
+    *,
+    with_holdout: bool = True,
+    holdout_at: Path | None = None,
+    with_task_md: bool = True,
+    out_json_text: str | None = None,
+    extra_reference_files: dict[str, str] | None = None,
+) -> Path:
     """Repo AFB finto ma fedele: 1 task eseguibile + 1 solo-spec.
 
     Il task eseguibile ha: un file di contesto identico (non entry), un sorgente
@@ -24,7 +32,10 @@ def _make_afb(root: Path, *, with_holdout: bool = True, holdout_at: Path | None 
     (visible / "src/__init__.py").write_text("", encoding="utf-8")
     (visible / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     (visible / "context.txt").write_text("contesto identico\n", encoding="utf-8")
-    (visible / "TASK.md").write_text("# Task 42\n\nFix `f`, poi crea `out.json`.\n", encoding="utf-8")
+    if with_task_md:
+        (visible / "TASK.md").write_text(
+            "# Task 42\n\nFix `f`, poi crea `out.json`.\n", encoding="utf-8"
+        )
     tests = visible / "tests"
     tests.mkdir()
     (tests / "__init__.py").write_text("", encoding="utf-8")
@@ -58,8 +69,15 @@ def _make_afb(root: Path, *, with_holdout: bool = True, holdout_at: Path | None 
         (reference / "src/__init__.py").write_text("", encoding="utf-8")
         (reference / "src/mod.py").write_text("def f():\n    return 2\n", encoding="utf-8")
         (reference / "out.json").write_text(
-            '{"done": true, "note": "fatto", "steps": ["fix"]}\n', encoding="utf-8"
+            out_json_text
+            if out_json_text is not None
+            else '{"done": true, "note": "fatto", "steps": ["fix"]}\n',
+            encoding="utf-8",
         )
+        for rel, content in (extra_reference_files or {}).items():
+            path = reference / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
 
     tasks = [
         {
@@ -215,3 +233,140 @@ def test_prefixed_name_rules():
 def test_missing_afb_root_is_clean_error(tmp_path):
     with pytest.raises(AfbImportError, match="tasks"):
         import_tasks(tmp_path / "nowhere", tmp_path / "out")
+
+
+def test_broken_tasks_json_is_clean_error(tmp_path):
+    root = tmp_path / "afb"
+    (root / "tasks/v0").mkdir(parents=True)
+    (root / "tasks/v0/tasks.json").write_text("{non-json", encoding="utf-8")
+    with pytest.raises(AfbImportError, match="JSON valido"):
+        import_tasks(root, tmp_path / "out")
+
+
+def test_tasks_json_not_a_list_is_clean_error(tmp_path):
+    root = tmp_path / "afb"
+    (root / "tasks/v0").mkdir(parents=True)
+    (root / "tasks/v0/tasks.json").write_text(json.dumps({"oops": "not a list"}), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="array di task"):
+        import_tasks(root, tmp_path / "out")
+
+
+def test_no_runnable_tasks_at_all_is_clean_error(tmp_path):
+    root = tmp_path / "afb"
+    (root / "tasks/v0").mkdir(parents=True)
+    (root / "tasks/v0/tasks.json").write_text(
+        json.dumps([{"id": "spec-only", "title": "no runnable_fixture"}]), encoding="utf-8"
+    )
+    with pytest.raises(AfbImportError, match="nessun task eseguibile"):
+        import_tasks(root, tmp_path / "out")
+
+
+def test_missing_public_tests_dir_is_clean_error(tmp_path):
+    root = tmp_path / "afb"
+    (root / "fixtures/v0/afb-x/agent_visible").mkdir(parents=True)
+    (root / "tasks/v0").mkdir(parents=True)
+    tasks = [
+        {
+            "id": "afb-x",
+            "title": "x",
+            "agent_prompt": "do it",
+            "runnable_fixture": {"path": "fixtures/v0/afb-x"},
+        }
+    ]
+    (root / "tasks/v0/tasks.json").write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="test pubblici non trovati"):
+        import_tasks(root, tmp_path / "out")
+
+
+def test_prompt_falls_back_to_agent_prompt_without_task_md(tmp_path):
+    afb = _make_afb(tmp_path / "afb", with_task_md=False)
+    out = tmp_path / "fixtures"
+    import_tasks(afb, out)
+    meta = json.loads((out / TASK_ID / "task.json").read_text(encoding="utf-8"))
+    assert meta["prompt"] == "Fix it (fallback prompt)."
+
+
+def test_no_entry_files_detected_is_clean_error(tmp_path):
+    """Reference identica al visibile: nessun diff, nessun artefatto solo-in-reference."""
+    root = tmp_path / "afb"
+    task_id = "afb-identical"
+    visible = root / "fixtures/v0" / task_id / "agent_visible"
+    (visible / "src").mkdir(parents=True)
+    (visible / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    tests = visible / "tests"
+    tests.mkdir()
+    (tests / "test_mod.py").write_text(
+        "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    base = root / "fixtures/v0" / task_id
+    hidden = base / "hidden_tests"
+    hidden.mkdir(parents=True)
+    (hidden / "test_hidden_mod.py").write_text(
+        "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    reference = base / "reference_solution"
+    (reference / "src").mkdir(parents=True)
+    (reference / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")  # identico
+
+    tasks = [
+        {
+            "id": task_id,
+            "title": "identical",
+            "agent_prompt": "nothing to fix",
+            "runnable_fixture": {
+                "path": f"fixtures/v0/{task_id}",
+                "public_tests": "agent_visible/tests",
+                "hidden_tests": "hidden_tests",
+                "reference_solution": "reference_solution",
+            },
+        }
+    ]
+    (root / "tasks/v0").mkdir(parents=True)
+    (root / "tasks/v0/tasks.json").write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="nessun entry file rilevato"):
+        import_tasks(root, tmp_path / "out")
+
+
+def test_entry_detection_skips_junk_and_reserved_names_in_reference(tmp_path):
+    """.git/ annidato, TASK.md e tests/ dentro reference/ non diventano entry file."""
+    afb = _make_afb(
+        tmp_path / "afb",
+        extra_reference_files={
+            ".git/config": "junk di controllo versione",
+            "TASK.md": "non è un entry file",
+            "tests/leftover.py": "asset di test, non un entry file",
+        },
+    )
+    out = tmp_path / "fixtures"
+    outcomes = import_tasks(afb, out)
+    entry_files = outcomes[0].entry_files
+    assert ".git/config" not in entry_files
+    assert "TASK.md" not in entry_files
+    assert "tests/leftover.py" not in entry_files
+    assert entry_files == ("out.json", "src/mod.py")
+
+
+def test_seed_stub_falls_back_to_empty_file_on_malformed_json(tmp_path):
+    afb = _make_afb(tmp_path / "afb", out_json_text="{not-valid-json")
+    out = tmp_path / "fixtures"
+    import_tasks(afb, out)
+    assert (out / TASK_ID / "seed/out.json").read_text(encoding="utf-8") == ""
+
+
+def test_seed_stub_falls_back_to_empty_file_for_non_dict_json(tmp_path):
+    afb = _make_afb(tmp_path / "afb", out_json_text="[1, 2, 3]")
+    out = tmp_path / "fixtures"
+    import_tasks(afb, out)
+    assert (out / TASK_ID / "seed/out.json").read_text(encoding="utf-8") == ""
+
+
+def test_empty_like_covers_every_json_type():
+    assert _empty_like(True) is False
+    assert _empty_like("text") == ""
+    assert _empty_like(3) == 0
+    assert _empty_like(3.5) == 0
+    assert _empty_like([1, 2]) == []
+    assert _empty_like({"a": 1}) == {}
+    assert _empty_like(None) is None

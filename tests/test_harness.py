@@ -7,10 +7,12 @@
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from aeh import grader as grader_mod
 from aeh.fixture import Fixture, FixtureError
 from aeh.grader import grade
 from aeh.report import write_results, write_run_card
@@ -71,6 +73,43 @@ def test_load_missing_meta_field(tmp_path):
         Fixture.load(broken)
 
 
+def test_load_invalid_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{non-json", encoding="utf-8")
+    with pytest.raises(FixtureError, match="JSON valido"):
+        Fixture.load(broken)
+
+
+def test_load_empty_entry_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_entry_file_missing_on_disk(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = ["dedup.py", "nope.py"]
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="nope.py"):
+        Fixture.load(broken)
+
+
+def test_load_empty_test_dir(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_public").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_public"):
+        Fixture.load(broken)
+
+
 # ---------- Separation ----------
 
 def test_workspace_has_no_hidden_tests(fixture, tmp_path):
@@ -115,6 +154,54 @@ def test_reference_solves(fixture, tmp_path):
     assert result.verdict == "SOLVED"
 
 
+def test_verdict_unsolved_when_nothing_passes(tmp_path):
+    """Un entry file che rompe l'import fa fallire ANCHE i public: né PARTIAL né SOLVED."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    (ws / "dedup.py").write_text("raise ImportError('boom')\n", encoding="utf-8")
+    result = grade(fx, ws, tmp_path)
+    assert result.public_passed == 0
+    assert result.hidden_passed == 0
+    assert result.verdict == "UNSOLVED"
+    assert not result.solved
+
+
+def test_grade_is_idempotent_over_same_run_dir(tmp_path):
+    """Rigrading nello stesso run_dir ripulisce la grading/ precedente invece di sporcarla."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    first = grade(fx, ws, tmp_path)
+    second = grade(fx, ws, tmp_path)
+    assert first.public_passed == second.public_passed
+    assert first.hidden_passed == second.hidden_passed
+
+
+def test_grade_raises_when_test_runner_produces_no_results(tmp_path, monkeypatch):
+    """Se il subprocess di grading non scrive risultati, l'errore non viene inghiottito."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(grader_mod.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="non ha prodotto risultati"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grade_reraises_oserror_without_sandbox(tmp_path, monkeypatch):
+    """Senza backend sandbox un OSError nell'esecuzione dei test non viene mascherato."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr(grader_mod.subprocess, "run", fake_run)
+    with pytest.raises(OSError, match="python3 non eseguibile"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
 # ---------- Tamper resistance ----------
 
 def test_agent_test_edits_do_not_reach_grading(tmp_path):
@@ -144,6 +231,27 @@ def test_prepare_refuses_existing_workspace(tmp_path):
     prepare_workspace(fx, tmp_path)
     with pytest.raises(FileExistsError):
         prepare_workspace(fx, tmp_path)
+
+
+def test_prepare_workspace_detects_hidden_leak_from_seed(tmp_path):
+    """L'invariante no-hidden-nel-workspace vale anche se la fuga viene dal seed stesso."""
+    broken = tmp_path / "broken-fixture"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "seed" / "test_hidden_sneaky.py").write_text("# leaked\n", encoding="utf-8")
+    fx = Fixture.load(broken)
+    with pytest.raises(RuntimeError, match="invariante violata"):
+        prepare_workspace(fx, tmp_path / "run")
+
+
+def test_prepare_workspace_skips_pycache(tmp_path):
+    broken = tmp_path / "broken-fixture"
+    shutil.copytree(FX_DEDUP, broken)
+    pycache = broken / "seed" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "dedup.cpython-311.pyc").write_bytes(b"junk")
+    fx = Fixture.load(broken)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    assert not (ws / "__pycache__").exists()
 
 
 # ---------- Solver execution ----------
@@ -202,3 +310,16 @@ def test_results_and_run_card(tmp_path):
     assert "SOLVED" in text
     assert "mai visti dall'agente" in text
     assert fx.hidden_sha256()[:16] in text
+
+
+def test_run_card_surfaces_unparsable_usage(tmp_path):
+    """Un usage file rotto non sparisce silenziosamente: la run card lo segnala."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    apply_reference_solver(fx, ws)
+    result = grade(fx, ws, tmp_path)
+    usage = {"error": "usage file non parsabile: boom", "source": "solver-reported"}
+    write_results(tmp_path, fx, "builtin:ref", None, result, usage=usage)
+    card = write_run_card(tmp_path)
+    text = card.read_text()
+    assert "⚠️" in text and "boom" in text

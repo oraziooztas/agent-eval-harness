@@ -1,6 +1,7 @@
 """Test dell'importer AFB: mappatura, entry detection, stub, holdout, CLI (ADR-001)."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -215,3 +216,94 @@ def test_prefixed_name_rules():
 def test_missing_afb_root_is_clean_error(tmp_path):
     with pytest.raises(AfbImportError, match="tasks"):
         import_tasks(tmp_path / "nowhere", tmp_path / "out")
+
+
+def test_invalid_tasks_json_is_clean_error(tmp_path):
+    afb = tmp_path / "afb"
+    tasks_dir = afb / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(AfbImportError, match="JSON valido"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_tasks_json_not_a_list_is_clean_error(tmp_path):
+    afb = tmp_path / "afb"
+    tasks_dir = afb / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(json.dumps({"id": "not-a-list"}), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="array di task"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_no_runnable_tasks_is_clean_error(tmp_path):
+    afb = tmp_path / "afb"
+    tasks_dir = afb / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    only_spec = [{"id": "afb-v0-999", "title": "Spec Only", "agent_prompt": "niente fixture"}]
+    (tasks_dir / "tasks.json").write_text(json.dumps(only_spec), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="eseguibile"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_missing_public_tests_dir_is_clean_error(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    shutil.rmtree(afb / "fixtures/v0" / TASK_ID / "agent_visible/tests")
+    with pytest.raises(AfbImportError, match="test pubblici non trovati"):
+        import_tasks(afb, tmp_path / "fixtures")
+
+
+def test_prompt_falls_back_to_agent_prompt_without_task_md(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    (afb / "fixtures/v0" / TASK_ID / "agent_visible/TASK.md").unlink()
+    outcomes = import_tasks(afb, tmp_path / "fixtures")
+    meta = json.loads((outcomes[0].fixture_dir / "task.json").read_text(encoding="utf-8"))
+    assert meta["prompt"] == "Fix it (fallback prompt)."
+
+
+def test_no_entry_files_detected_is_clean_error(tmp_path):
+    """Se la reference è identica al visibile, non c'è nulla da far fare all'agente."""
+    afb = _make_afb(tmp_path / "afb")
+    src = afb / "fixtures/v0" / TASK_ID
+    (src / "reference_solution/src/mod.py").write_text(
+        (src / "agent_visible/src/mod.py").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (src / "reference_solution/out.json").unlink()
+    with pytest.raises(AfbImportError, match="nessun entry file rilevato"):
+        import_tasks(afb, tmp_path / "fixtures")
+
+
+def test_seed_stub_for_non_json_only_in_reference_artifact(tmp_path):
+    """Artefatto solo-in-reference non .json (es. un log testuale): stub file vuoto."""
+    afb = _make_afb(tmp_path / "afb")
+    src = afb / "fixtures/v0" / TASK_ID
+    (src / "reference_solution/out.json").unlink()
+    (src / "reference_solution/attempt_log.txt").write_text("log finale\n", encoding="utf-8")
+    outcomes = import_tasks(afb, tmp_path / "fixtures")
+    dest = outcomes[0].fixture_dir
+    assert (dest / "seed/attempt_log.txt").read_text(encoding="utf-8") == ""
+    assert outcomes[0].seed_stubs == ("attempt_log.txt",)
+
+
+def test_seed_stub_for_malformed_json_only_in_reference_artifact(tmp_path):
+    """Artefatto solo-in-reference .json ma non JSON valido: stub file vuoto, non un crash."""
+    afb = _make_afb(tmp_path / "afb")
+    src = afb / "fixtures/v0" / TASK_ID
+    (src / "reference_solution/out.json").write_text("{not json", encoding="utf-8")
+    outcomes = import_tasks(afb, tmp_path / "fixtures")
+    dest = outcomes[0].fixture_dir
+    assert (dest / "seed/out.json").read_text(encoding="utf-8") == ""
+
+
+def test_seed_stub_empty_like_covers_all_json_types(tmp_path):
+    """_empty_like deve svuotare correttamente ogni tipo JSON top-level, non solo str/bool/list."""
+    afb = _make_afb(tmp_path / "afb")
+    src = afb / "fixtures/v0" / TASK_ID
+    (src / "reference_solution/out.json").write_text(
+        json.dumps({"count": 3, "ratio": 1.5, "meta": {"k": "v"}, "extra": None}),
+        encoding="utf-8",
+    )
+    outcomes = import_tasks(afb, tmp_path / "fixtures")
+    dest = outcomes[0].fixture_dir
+    stub = json.loads((dest / "seed/out.json").read_text(encoding="utf-8"))
+    assert stub == {"count": 0, "ratio": 0, "meta": {}, "extra": None}

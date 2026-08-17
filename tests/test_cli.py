@@ -98,3 +98,14 @@ def test_error_on_missing_fixture(capsys):
     code = main(["run", "/nonexistent/fixture", "--noop"])
     assert code == 1
     assert "errore" in capsys.readouterr().err
+
+
+def test_sandbox_solver_without_backend_errors(tmp_path, capsys, monkeypatch):
+    from aeh import cli as cli_module
+
+    monkeypatch.setattr(cli_module.sandbox, "backend", lambda: None)
+    code = main(
+        ["run", str(FX_SLUG), "--solver", "true", "--sandbox-solver", "--out", str(tmp_path / "run")]
+    )
+    assert code == 1
+    assert "sandbox" in capsys.readouterr().err

@@ -141,3 +141,43 @@ def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     result = grade(fx, ws, tmp_path)
     assert result.grading_sandbox == "fallback-off:seatbelt"
     assert result.public  # il grading è comunque avvenuto
+
+
+def test_grading_labels_unavailable_without_a_backend(tmp_path, monkeypatch):
+    """Nessun backend sull'host: il grading avviene comunque (senza rete negata)
+    e lo dichiara come 'unavailable', mai come se fosse silenziosamente 'disabled'."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+    assert result.public
+
+
+# ---------- Robustezza del test runner ----------
+
+def test_grading_raises_when_test_runner_produces_no_output(tmp_path, monkeypatch):
+    """Se il subprocess di test "riesce" ma non scrive risultati, è un fallimento
+    del harness da segnalare, non un grading vuoto passato in silenzio."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fake = subprocess.CompletedProcess(args=["python3"], returncode=0, stdout="", stderr="boom")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(RuntimeError, match="non ha prodotto risultati"):
+        grade(fx, ws, tmp_path)
+
+
+def test_grading_oserror_propagates_without_a_backend(tmp_path, monkeypatch):
+    """Senza backend un OSError nell'exec del test runner (es. python3 assente)
+    non va inghiottito: non c'è un fallback sandboxato a cui ripiegare."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+
+    def boom(*args, **kwargs):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(OSError, match="python3 non eseguibile"):
+        grade(fx, ws, tmp_path)

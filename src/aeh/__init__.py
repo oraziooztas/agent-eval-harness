@@ -21,5 +21,3 @@ __all__ = [
     "prepare_workspace",
     "run_solver",
 ]
-
-__version__ = "0.1.0"

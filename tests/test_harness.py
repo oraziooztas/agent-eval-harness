@@ -71,6 +71,41 @@ def test_load_missing_meta_field(tmp_path):
         Fixture.load(broken)
 
 
+def test_load_malformed_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(FixtureError, match="JSON valido"):
+        Fixture.load(broken)
+
+
+def test_load_empty_entry_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_missing_entry_file(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "reference" / "dedup.py").unlink()
+    with pytest.raises(FixtureError, match="entry file 'dedup.py' mancante in reference/"):
+        Fixture.load(broken)
+
+
+def test_load_test_dir_with_no_py_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_public").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_public/ non contiene file .py"):
+        Fixture.load(broken)
+
+
 # ---------- Separation ----------
 
 def test_workspace_has_no_hidden_tests(fixture, tmp_path):
@@ -80,6 +115,27 @@ def test_workspace_has_no_hidden_tests(fixture, tmp_path):
     assert "PROMPT.md" in names
     assert any(n.startswith("test_public") for n in names)
     assert not any(n.startswith("test_hidden") for n in names)
+
+
+def test_prepare_workspace_refuses_hidden_named_file_in_seed(tmp_path):
+    """Invariante: anche un file col nome da hidden test già dentro seed/ blocca la prep."""
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "seed" / "test_hidden_leak.py").write_text("# non dovrebbe mai finire nel workspace\n")
+    fx = Fixture.load(broken)
+    with pytest.raises(RuntimeError, match="invariante violata"):
+        prepare_workspace(fx, tmp_path)
+
+
+def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    cache = broken / "seed" / "__pycache__"
+    cache.mkdir()
+    (cache / "dedup.cpython-311.pyc").write_text("junk")
+    fx = Fixture.load(broken)
+    ws = prepare_workspace(fx, tmp_path)
+    assert not (ws / "__pycache__").exists()
 
 
 def test_grading_dir_has_pristine_hidden_tests(fixture, tmp_path):
@@ -113,6 +169,31 @@ def test_reference_solves(fixture, tmp_path):
     result = grade(fixture, ws, tmp_path)
     assert result.solved, [t for t in result.public + result.hidden if t["outcome"] != "pass"]
     assert result.verdict == "SOLVED"
+
+
+def test_entry_file_broken_everywhere_is_unsolved_not_partial(tmp_path):
+    """Un entry file che rompe pubblici E nascosti è UNSOLVED, non PARTIAL."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    (ws / "dedup.py").write_text(
+        "def dedup_rows(rows, key):\n    raise RuntimeError('broken')\n"
+    )
+    result = grade(fx, ws, tmp_path)
+    assert result.public_passed == 0
+    assert result.hidden_passed == 0
+    assert result.verdict == "UNSOLVED"
+    assert not result.solved
+
+
+def test_grade_is_idempotent_on_the_same_run_dir(tmp_path):
+    """Rigradare nella stessa run_dir sovrascrive la grading dir precedente."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    first = grade(fx, ws, tmp_path)
+    apply_reference_solver(fx, ws)
+    second = grade(fx, ws, tmp_path)
+    assert not first.solved
+    assert second.solved
 
 
 # ---------- Tamper resistance ----------
@@ -174,6 +255,17 @@ def test_solver_timeout(tmp_path):
     assert res.returncode is None
 
 
+def test_solver_timeout_preserves_partial_output(tmp_path):
+    """Il rc/timeout salva anche l'output prodotto prima del kill (bytes decodificati)."""
+    fx = Fixture.load(FX_SLUG)
+    ws = prepare_workspace(fx, tmp_path)
+    res = run_solver(
+        ws, "echo prima-del-timeout && sleep 5", 1, tmp_path / "transcript.txt"
+    )
+    assert res.status == "timeout"
+    assert "prima-del-timeout" in res.transcript_path.read_text()
+
+
 def test_shell_solver_can_solve(tmp_path):
     """Un solver reale (shell) che scrive la soluzione corretta viene valutato SOLVED."""
     fx = Fixture.load(FX_SLUG)
@@ -202,3 +294,16 @@ def test_results_and_run_card(tmp_path):
     assert "SOLVED" in text
     assert "mai visti dall'agente" in text
     assert fx.hidden_sha256()[:16] in text
+
+
+def test_run_card_flags_unparsable_usage(tmp_path):
+    """Usage riportata dal solver ma illeggibile: il run card lo segnala, non lo tace."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    apply_reference_solver(fx, ws)
+    result = grade(fx, ws, tmp_path)
+    usage = {"error": "usage file non parsabile: ...", "source": "solver-reported"}
+    write_results(tmp_path, fx, "builtin:ref", None, result, usage=usage)
+    card = write_run_card(tmp_path)
+    assert "⚠️" in card.read_text()
+    assert "usage file non parsabile" in card.read_text()

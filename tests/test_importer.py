@@ -215,3 +215,93 @@ def test_prefixed_name_rules():
 def test_missing_afb_root_is_clean_error(tmp_path):
     with pytest.raises(AfbImportError, match="tasks"):
         import_tasks(tmp_path / "nowhere", tmp_path / "out")
+
+
+def test_malformed_tasks_json_is_clean_error(tmp_path):
+    tasks_dir = tmp_path / "afb/tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(AfbImportError, match="JSON valido"):
+        import_tasks(tmp_path / "afb", tmp_path / "out")
+
+
+def test_tasks_json_must_be_a_list(tmp_path):
+    tasks_dir = tmp_path / "afb/tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(json.dumps({"not": "a list"}), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="array"):
+        import_tasks(tmp_path / "afb", tmp_path / "out")
+
+
+def test_no_runnable_tasks_is_clean_error(tmp_path):
+    tasks_dir = tmp_path / "afb/tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(
+        json.dumps([{"id": "spec-only", "agent_prompt": "niente fixture"}]), encoding="utf-8"
+    )
+    with pytest.raises(AfbImportError, match="eseguibile"):
+        import_tasks(tmp_path / "afb", tmp_path / "out")
+
+
+def test_missing_public_tests_dir_is_clean_error(tmp_path):
+    afb = tmp_path / "afb"
+    (afb / "fixtures/v0/broken-task/agent_visible").mkdir(parents=True)  # niente tests/
+    tasks_dir = afb / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    tasks = [
+        {
+            "id": "broken-task",
+            "agent_prompt": "x",
+            "runnable_fixture": {"path": "fixtures/v0/broken-task"},
+        }
+    ]
+    (tasks_dir / "tasks.json").write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="test pubblici"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_identical_reference_raises_no_entry_files(tmp_path):
+    """Se la reference è byte-identica al visibile non c'è nulla da imparare: errore, non fixture vuota."""
+    afb = tmp_path / "afb"
+    visible = afb / "fixtures/v0/same-task/agent_visible"
+    (visible / "src").mkdir(parents=True)
+    (visible / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    tests = visible / "tests"
+    tests.mkdir()
+    (tests / "test_mod.py").write_text(
+        "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    holdout = afb / "fixtures/v0/same-task"
+    hidden = holdout / "hidden_tests"
+    hidden.mkdir(parents=True)
+    (hidden / "test_hidden_mod.py").write_text(
+        "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    reference = holdout / "reference_solution"
+    (reference / "src").mkdir(parents=True)
+    (reference / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")  # identico
+
+    tasks_dir = afb / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    tasks = [
+        {
+            "id": "same-task",
+            "agent_prompt": "x",
+            "runnable_fixture": {"path": "fixtures/v0/same-task"},
+        }
+    ]
+    (tasks_dir / "tasks.json").write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="entry file"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_seed_stub_falls_back_to_empty_file_for_bad_json(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    ref_out = tmp_path / "afb/fixtures/v0" / TASK_ID / "reference_solution/out.json"
+    ref_out.write_text("{not valid json", encoding="utf-8")
+    out = tmp_path / "fixtures"
+    import_tasks(afb, out)
+    stub = (out / TASK_ID / "seed/out.json").read_text(encoding="utf-8")
+    assert stub == ""

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from aeh.fixture import Fixture, FixtureError
-from aeh.grader import grade
+from aeh.grader import GradeResult, grade
 from aeh.report import write_results, write_run_card
 from aeh.runner import (
     apply_reference_solver,
@@ -71,6 +71,43 @@ def test_load_missing_meta_field(tmp_path):
         Fixture.load(broken)
 
 
+def test_load_invalid_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(FixtureError, match="JSON valido"):
+        Fixture.load(broken)
+
+
+def test_load_empty_entry_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_missing_entry_file(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = ["nope.py"]
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="nope.py"):
+        Fixture.load(broken)
+
+
+def test_load_empty_test_dir(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_public").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_public"):
+        Fixture.load(broken)
+
+
 # ---------- Separation ----------
 
 def test_workspace_has_no_hidden_tests(fixture, tmp_path):
@@ -115,6 +152,24 @@ def test_reference_solves(fixture, tmp_path):
     assert result.verdict == "SOLVED"
 
 
+def test_verdict_unsolved_when_nothing_passes():
+    result = GradeResult(
+        public=[{"id": "t.test_public.a", "outcome": "fail", "message": ""}],
+        hidden=[{"id": "t.test_hidden.b", "outcome": "error", "message": ""}],
+    )
+    assert result.verdict == "UNSOLVED"
+    assert not result.solved
+
+
+def test_grade_can_run_twice_in_same_run_dir(tmp_path):
+    """Ri-gradare nella stessa run_dir (es. `aeh report`) sovrascrive la grading/ precedente."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    grade(fx, ws, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.hidden
+
+
 # ---------- Tamper resistance ----------
 
 def test_agent_test_edits_do_not_reach_grading(tmp_path):
@@ -144,6 +199,27 @@ def test_prepare_refuses_existing_workspace(tmp_path):
     prepare_workspace(fx, tmp_path)
     with pytest.raises(FileExistsError):
         prepare_workspace(fx, tmp_path)
+
+
+def test_prepare_workspace_rejects_seed_with_hidden_named_file(tmp_path):
+    """L'invariante no-hidden-nel-workspace vale anche se il leak viene dal seed stesso."""
+    broken = tmp_path / "fx-leaky"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "seed" / "test_hidden_sneaky.py").write_text("# non dovrebbe mai uscire dal fixture\n")
+    fx = Fixture.load(broken)
+    with pytest.raises(RuntimeError, match="test_hidden_sneaky.py"):
+        prepare_workspace(fx, tmp_path / "run")
+
+
+def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
+    broken = tmp_path / "fx-copy"
+    shutil.copytree(FX_DEDUP, broken)
+    pycache = broken / "seed" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "junk.pyc").write_bytes(b"junk")
+    fx = Fixture.load(broken)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    assert not (ws / "__pycache__").exists()
 
 
 # ---------- Solver execution ----------
@@ -202,3 +278,16 @@ def test_results_and_run_card(tmp_path):
     assert "SOLVED" in text
     assert "mai visti dall'agente" in text
     assert fx.hidden_sha256()[:16] in text
+
+
+def test_run_card_shows_usage_error(tmp_path):
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    apply_reference_solver(fx, ws)
+    result = grade(fx, ws, tmp_path)
+    usage = {"error": "usage file non parsabile: boom", "source": "solver-reported"}
+    write_results(tmp_path, fx, "agent-x", None, result, usage)
+    card = write_run_card(tmp_path)
+    text = card.read_text()
+    assert "⚠️" in text
+    assert "boom" in text

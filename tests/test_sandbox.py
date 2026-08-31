@@ -130,6 +130,15 @@ def test_grading_sandbox_disabled(tmp_path):
     assert result.grading_sandbox == "disabled"
 
 
+def test_grading_sandbox_unavailable_without_backend(tmp_path, monkeypatch):
+    """net_sandbox richiesto (default) ma nessun backend sull'host: dichiarato, non un errore."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+
+
 def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     """Backend presente ma rotto: il grading resta valido e lo dichiara."""
     monkeypatch.setattr(sandbox, "backend", lambda: "seatbelt")

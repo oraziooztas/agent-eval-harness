@@ -71,6 +71,41 @@ def test_load_missing_meta_field(tmp_path):
         Fixture.load(broken)
 
 
+def test_load_bad_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(FixtureError, match="JSON"):
+        Fixture.load(broken)
+
+
+def test_load_entry_files_empty(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_missing_entry_file(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "reference" / "dedup.py").unlink()
+    with pytest.raises(FixtureError, match="entry file"):
+        Fixture.load(broken)
+
+
+def test_load_test_dir_without_py_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_hidden").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_hidden"):
+        Fixture.load(broken)
+
+
 # ---------- Separation ----------
 
 def test_workspace_has_no_hidden_tests(fixture, tmp_path):
@@ -96,6 +131,16 @@ def test_grade_records_hidden_hash(fixture, tmp_path):
     assert result.hidden_sha256 == fixture.hidden_sha256()
 
 
+def test_grade_can_be_rerun_on_the_same_run_dir(tmp_path):
+    """`aeh report`/una rivalutazione possono richiamare grade() sullo stesso run_dir."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    first = grade(fx, ws, tmp_path)
+    second = grade(fx, ws, tmp_path)
+    assert second.hidden_sha256 == first.hidden_sha256
+    assert second.public_passed == first.public_passed
+
+
 # ---------- Fixture contract (validate semantics) ----------
 
 def test_seed_passes_public_fails_hidden(fixture, tmp_path):
@@ -104,6 +149,18 @@ def test_seed_passes_public_fails_hidden(fixture, tmp_path):
     assert result.public_passed == len(result.public) > 0
     assert result.hidden_passed < len(result.hidden)
     assert result.verdict == "PARTIAL"
+    assert not result.solved
+
+
+def test_unsolved_verdict_when_entry_file_breaks_every_test(tmp_path):
+    """Un entry file che non importa nemmeno (0 public, 0 hidden) è UNSOLVED, non PARTIAL."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    (ws / "dedup.py").write_text("def(:\n", encoding="utf-8")  # SyntaxError all'import
+    result = grade(fx, ws, tmp_path)
+    assert result.public_passed == 0
+    assert result.hidden_passed == 0
+    assert result.verdict == "UNSOLVED"
     assert not result.solved
 
 
@@ -146,6 +203,28 @@ def test_prepare_refuses_existing_workspace(tmp_path):
         prepare_workspace(fx, tmp_path)
 
 
+def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
+    """Un __pycache__ residuo nel seed della fixture non deve finire nel workspace."""
+    broken = tmp_path / "fx"
+    shutil.copytree(FX_DEDUP, broken)
+    cache = broken / "seed" / "__pycache__"
+    cache.mkdir()
+    (cache / "dedup.cpython-311.pyc").write_text("junk", encoding="utf-8")
+    fx = Fixture.load(broken)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    assert not (ws / "__pycache__").exists()
+
+
+def test_prepare_workspace_rejects_hidden_named_file_leaking_from_seed(tmp_path):
+    """Invariante di separazione: un file già nel seed con nome da hidden test blocca la prep."""
+    broken = tmp_path / "fx"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "seed" / "test_hidden_sneaky.py").write_text("# non dovrebbe mai uscire dal seed\n")
+    fx = Fixture.load(broken)
+    with pytest.raises(RuntimeError, match="invariante violata"):
+        prepare_workspace(fx, tmp_path / "run")
+
+
 # ---------- Solver execution ----------
 
 def test_solver_transcript_and_status(tmp_path):
@@ -172,6 +251,25 @@ def test_solver_timeout(tmp_path):
     res = run_solver(ws, "sleep 5", 1, tmp_path / "transcript.txt")
     assert res.status == "timeout"
     assert res.returncode is None
+
+
+def test_solver_timeout_keeps_partial_output(tmp_path):
+    """subprocess.run(text=True) consegna comunque bytes su TimeoutExpired: va decodificato.
+
+    Regressione reale: senza il decode esplicito questo caso alza un AttributeError
+    invece di un timeout onesto, perdendo l'output parziale del solver.
+    """
+    fx = Fixture.load(FX_SLUG)
+    ws = prepare_workspace(fx, tmp_path)
+    cmd = (
+        "python3 -c \"import sys,time; sys.stdout.write('partial-out'); sys.stdout.flush(); "
+        "sys.stderr.write('partial-err'); sys.stderr.flush(); time.sleep(5)\""
+    )
+    res = run_solver(ws, cmd, 1, tmp_path / "transcript.txt")
+    assert res.status == "timeout"
+    text = res.transcript_path.read_text()
+    assert "partial-out" in text
+    assert "partial-err" in text
 
 
 def test_shell_solver_can_solve(tmp_path):
@@ -202,3 +300,14 @@ def test_results_and_run_card(tmp_path):
     assert "SOLVED" in text
     assert "mai visti dall'agente" in text
     assert fx.hidden_sha256()[:16] in text
+
+
+def test_run_card_surfaces_unparsable_usage(tmp_path):
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    apply_reference_solver(fx, ws)
+    result = grade(fx, ws, tmp_path)
+    usage = {"error": "usage file non parsabile: boom", "source": "solver-reported"}
+    write_results(tmp_path, fx, "builtin:ref", None, result, usage)
+    card = write_run_card(tmp_path).read_text()
+    assert "usage file non parsabile" in card

@@ -1,13 +1,20 @@
 """Test dell'importer AFB: mappatura, entry detection, stub, holdout, CLI (ADR-001)."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from aeh.cli import main
 from aeh.fixture import Fixture
-from aeh.importer import AfbImportError, _prefixed_name, import_tasks
+from aeh.importer import (
+    AfbImportError,
+    _empty_like,
+    _prefixed_name,
+    import_tasks,
+    load_runnable_tasks,
+)
 
 TASK_ID = "afb-v0-042"
 
@@ -215,3 +222,90 @@ def test_prefixed_name_rules():
 def test_missing_afb_root_is_clean_error(tmp_path):
     with pytest.raises(AfbImportError, match="tasks"):
         import_tasks(tmp_path / "nowhere", tmp_path / "out")
+
+
+def test_load_runnable_tasks_rejects_bad_json(tmp_path):
+    tasks_dir = tmp_path / "afb" / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(AfbImportError, match="JSON"):
+        load_runnable_tasks(tmp_path / "afb")
+
+
+def test_load_runnable_tasks_rejects_non_list(tmp_path):
+    tasks_dir = tmp_path / "afb" / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(json.dumps({"not": "a list"}), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="array"):
+        load_runnable_tasks(tmp_path / "afb")
+
+
+def test_import_tasks_errors_when_none_are_runnable(tmp_path):
+    tasks_dir = tmp_path / "afb" / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(
+        json.dumps([{"id": "spec-only", "agent_prompt": "niente fixture"}]), encoding="utf-8"
+    )
+    with pytest.raises(AfbImportError, match="nessun task eseguibile"):
+        import_tasks(tmp_path / "afb", tmp_path / "out")
+
+
+def test_import_task_missing_public_tests_dir(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    shutil.rmtree(afb / "fixtures/v0" / TASK_ID / "agent_visible" / "tests")
+    with pytest.raises(AfbImportError, match="test pubblici"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_import_without_task_md_uses_agent_prompt_fallback(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    (afb / "fixtures/v0" / TASK_ID / "agent_visible" / "TASK.md").unlink()
+    outcomes = import_tasks(afb, tmp_path / "out")
+    meta = json.loads((outcomes[0].fixture_dir / "task.json").read_text(encoding="utf-8"))
+    assert meta["prompt"] == "Fix it (fallback prompt)."
+
+
+def test_import_raises_when_reference_identical_to_visible(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    # la reference ridiventa identica al seed: nessun entry file da rilevare
+    (afb / "fixtures/v0" / TASK_ID / "reference_solution" / "src/mod.py").write_text(
+        "def f():\n    return 1\n", encoding="utf-8"
+    )
+    (afb / "fixtures/v0" / TASK_ID / "reference_solution" / "out.json").unlink()
+    with pytest.raises(AfbImportError, match="nessun entry file"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_detect_entry_files_ignores_nested_junk_and_test_assets_in_reference(tmp_path):
+    """Un file non-.pyc dentro un __pycache__ annidato o una copia di tests/TASK.md non è un entry."""
+    afb = _make_afb(tmp_path / "afb")
+    reference = afb / "fixtures/v0" / TASK_ID / "reference_solution"
+    # non-.pyc dentro una dir junk: _is_junk(item) è False, deve fermarlo il check sui path parts
+    (reference / "src/__pycache__").mkdir()
+    (reference / "src/__pycache__/notes.txt").write_text("junk annidato\n", encoding="utf-8")
+    (reference / "tests").mkdir()
+    (reference / "tests/test_mod.py").write_text("# copia irrilevante\n", encoding="utf-8")
+    (reference / "TASK.md").write_text("# copia irrilevante\n", encoding="utf-8")
+    outcomes = import_tasks(afb, tmp_path / "out")
+    assert outcomes[0].entry_files == ("out.json", "src/mod.py")
+
+
+@pytest.mark.parametrize(
+    "content", ["[1, 2, 3]", "{not valid json"], ids=["non-dict-json", "invalid-json"]
+)
+def test_write_seed_stub_falls_back_to_empty_file(tmp_path, content):
+    afb = _make_afb(tmp_path / "afb")
+    reference = afb / "fixtures/v0" / TASK_ID / "reference_solution"
+    (reference / "out.json").write_text(content, encoding="utf-8")
+    outcomes = import_tasks(afb, tmp_path / "out")
+    assert (outcomes[0].fixture_dir / "seed/out.json").read_text(encoding="utf-8") == ""
+
+
+def test_empty_like_covers_every_json_type():
+    assert _empty_like(True) is False
+    assert _empty_like("x") == ""
+    assert _empty_like(3) == 0
+    assert _empty_like(3.5) == 0
+    assert _empty_like([1, 2]) == []
+    assert _empty_like({"a": 1}) == {}
+    assert _empty_like(None) is None

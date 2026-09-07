@@ -193,6 +193,13 @@ def test_load_usage_broken_json(tmp_path):
     assert "error" in usage
 
 
+def test_load_usage_rejects_valid_json_that_is_not_an_object(tmp_path):
+    f = tmp_path / "u.json"
+    f.write_text("[1, 2, 3]", encoding="utf-8")
+    usage = load_usage(f)
+    assert "error" in usage and "oggetto JSON" in usage["error"]
+
+
 def test_cli_run_ingests_usage_with_prices(tmp_path):
     """E2E: il solver scrive AEH_USAGE_FILE, i prezzi CLI producono il costo."""
     out = tmp_path / "run"

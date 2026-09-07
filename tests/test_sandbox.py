@@ -141,3 +141,43 @@ def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     result = grade(fx, ws, tmp_path)
     assert result.grading_sandbox == "fallback-off:seatbelt"
     assert result.public  # il grading è comunque avvenuto
+
+
+def test_grading_sandbox_unavailable_when_host_has_no_backend(tmp_path, monkeypatch):
+    """Host senza alcun backend: la richiesta di sandbox è dichiarata 'unavailable', non spacciata per attiva."""
+    from aeh import grader as grader_mod
+
+    monkeypatch.setattr(grader_mod.sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+    assert result.public  # il grading avviene comunque, solo non sandboxato
+
+
+def test_grading_raises_when_test_runner_produces_no_results(tmp_path, monkeypatch):
+    """Se il runner non scrive risultati (crash silenzioso), il grading fallisce in modo esplicito."""
+    from aeh import grader as grader_mod
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(grader_mod.subprocess, "run", fake_run)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(RuntimeError, match="non ha prodotto risultati"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grading_reraises_oserror_when_no_backend_to_fall_back_on(tmp_path, monkeypatch):
+    """Senza sandbox in gioco un OSError nell'esecuzione del test runner non va inghiottito."""
+    from aeh import grader as grader_mod
+
+    def fake_run(cmd, **kwargs):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr(grader_mod.subprocess, "run", fake_run)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(OSError, match="non eseguibile"):
+        grade(fx, ws, tmp_path, net_sandbox=False)

@@ -7,10 +7,12 @@
 
 import json
 import shutil
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 
+import aeh
 from aeh.fixture import Fixture, FixtureError
 from aeh.grader import grade
 from aeh.report import write_results, write_run_card
@@ -34,6 +36,13 @@ FX_TOC = FIXTURES / "fx-004-markdown-toc"
 )
 def fixture(request) -> Fixture:
     return Fixture.load(request.param)
+
+
+# ---------- Package metadata ----------
+
+def test_version_matches_installed_package():
+    """Regressione: __version__ era hardcoded a '0.1.0' e non seguiva pyproject.toml."""
+    assert aeh.__version__ == version("agent-eval-harness")
 
 
 # ---------- Fixture loading ----------

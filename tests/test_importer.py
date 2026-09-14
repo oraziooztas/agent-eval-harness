@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import aeh
 from aeh.cli import main
 from aeh.fixture import Fixture
 from aeh.importer import AfbImportError, _prefixed_name, import_tasks
@@ -130,6 +131,7 @@ def test_import_complete_layout_and_metadata(tmp_path):
     assert prov["hidden_tests_origin"] == "afb-repo"
     assert prov["seed_stubs"] == ["out.json"]
     assert prov["disclosed_example"] is True
+    assert prov["imported_with"] == f"aeh {aeh.__version__}"
 
     # la fixture importata è caricabile subito dal modello aeh
     fixture = Fixture.load(dest)

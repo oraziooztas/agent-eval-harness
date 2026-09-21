@@ -130,6 +130,44 @@ def test_grading_sandbox_disabled(tmp_path):
     assert result.grading_sandbox == "disabled"
 
 
+def test_grading_sandbox_unavailable_on_host_without_backend(tmp_path, monkeypatch):
+    """net_sandbox=True (default) ma nessun backend sul host: lo stato è 'unavailable', non un crash."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+    assert result.public  # il grading avviene comunque, solo senza rete negata
+
+
+def test_grading_reraises_when_test_runner_cannot_even_exec(tmp_path, monkeypatch):
+    """Senza backend, un OSError nell'eseguire il test runner (python3 assente) non va inghiottito."""
+    from aeh import grader
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("python3 non trovato")
+
+    monkeypatch.setattr(grader.subprocess, "run", _boom)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(OSError, match="python3 non trovato"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grading_raises_when_runner_produces_no_results(tmp_path, monkeypatch):
+    """Il subprocess 'riesce' ma non scrive risultati: grading fallito e dichiarato, mai silenzioso."""
+    from aeh import grader
+
+    def _fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(args=["python3"], returncode=0, stdout="", stderr="boh")
+
+    monkeypatch.setattr(grader.subprocess, "run", _fake_run)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(RuntimeError, match="test runner non ha prodotto risultati"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
 def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     """Backend presente ma rotto: il grading resta valido e lo dichiara."""
     monkeypatch.setattr(sandbox, "backend", lambda: "seatbelt")

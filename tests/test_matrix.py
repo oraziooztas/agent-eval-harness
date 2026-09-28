@@ -193,6 +193,15 @@ def test_load_usage_broken_json(tmp_path):
     assert "error" in usage
 
 
+def test_load_usage_not_an_object(tmp_path):
+    """Il solver deve scrivere un oggetto JSON: una lista o un numero sono un errore soft."""
+    f = tmp_path / "u.json"
+    f.write_text("[1, 2, 3]", encoding="utf-8")
+    usage = load_usage(f)
+    assert "error" in usage
+    assert usage["source"] == "solver-reported"
+
+
 def test_cli_run_ingests_usage_with_prices(tmp_path):
     """E2E: il solver scrive AEH_USAGE_FILE, i prezzi CLI producono il costo."""
     out = tmp_path / "run"
@@ -212,3 +221,16 @@ def test_cli_run_ingests_usage_with_prices(tmp_path):
     assert data["solver"]["usage"]["cost_eur"] == 7.0  # 1M*2 + 0.5M*10 per Mtok
     card = (out / "run_card.md").read_text()
     assert "solver-reported" in card and "7.0 €" in card
+
+
+def test_cli_run_reports_unparsable_usage_in_card(tmp_path):
+    """Un solver che scrive un usage file rotto non deve far cadere il run: warning nella card."""
+    out = tmp_path / "run"
+    ref = FX_SLUG / "reference" / "slugify.py"
+    solver = f"cp '{ref}' slugify.py && printf 'not-json' > \"$AEH_USAGE_FILE\""
+    code = main(["run", str(FX_SLUG), "--solver", solver, "--out", str(out)])
+    assert code == 0
+    data = json.loads((out / "results.json").read_text())
+    assert "error" in data["solver"]["usage"]
+    card = (out / "run_card.md").read_text()
+    assert "⚠️" in card and "usage" in card.lower()

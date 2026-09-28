@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import aeh
 from aeh.fixture import HIDDEN_PREFIX, PUBLIC_PREFIX, Fixture
 
 JUNK_DIRS = frozenset({"__pycache__", ".git"})
@@ -167,7 +168,7 @@ def import_task(
             "source": "agent-failure-eval-bench",
             "suite_version": str(task.get("suite_version", "")),
             "afb_task_id": task_id,
-            "imported_with": f"aeh {_aeh_version()}",
+            "imported_with": f"aeh {aeh.__version__}",
             "imported_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "disclosed_example": True,
             "hidden_tests_origin": hidden_origin,
@@ -328,12 +329,3 @@ def _prefixed_name(name: str, prefix: str) -> str:
 
 def _is_junk(path: Path) -> bool:
     return path.name in JUNK_DIRS or path.name in JUNK_FILES or path.suffix == ".pyc"
-
-
-def _aeh_version() -> str:
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-
-        return version("agent-eval-harness")
-    except PackageNotFoundError:  # pragma: no cover - solo fuori da un install
-        return "dev"

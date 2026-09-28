@@ -141,3 +141,53 @@ def test_grading_falls_back_when_backend_broken(tmp_path, monkeypatch):
     result = grade(fx, ws, tmp_path)
     assert result.grading_sandbox == "fallback-off:seatbelt"
     assert result.public  # il grading è comunque avvenuto
+
+
+def test_grading_records_unavailable_when_no_backend(tmp_path, monkeypatch):
+    """net_sandbox=True ma nessun backend sull'host: dichiarato 'unavailable', grading valido."""
+    from aeh import grader
+
+    monkeypatch.setattr(grader.sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path, net_sandbox=True)
+    assert result.grading_sandbox == "unavailable"
+    assert result.public
+
+
+def test_grading_oserror_propagates_without_backend(tmp_path, monkeypatch):
+    """Senza backend un OSError nell'esecuzione dei test non ha un fallback: risale."""
+    from aeh import grader
+
+    def _boom(*_a, **_k):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr(grader.subprocess, "run", _boom)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(OSError, match="python3 non eseguibile"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grading_raises_when_runner_produces_no_results(tmp_path, monkeypatch):
+    """Il test runner gira ma non produce l'output atteso: errore esplicito, non un grading silenzioso."""
+    from aeh import grader
+
+    fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="mistero")
+    monkeypatch.setattr(grader.subprocess, "run", lambda *a, **k: fake_proc)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    with pytest.raises(RuntimeError, match="test runner non ha prodotto risultati"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grading_regrades_into_existing_dir(tmp_path):
+    """Un secondo grade() sullo stesso run_dir ripulisce la grading/ precedente."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    first = grade(fx, ws, tmp_path)
+    marker = tmp_path / "grading" / "leftover-from-first-run.txt"
+    marker.write_text("stale", encoding="utf-8")
+    second = grade(fx, ws, tmp_path)
+    assert not marker.exists()
+    assert second.public_passed == first.public_passed

@@ -71,6 +71,53 @@ def test_load_missing_meta_field(tmp_path):
         Fixture.load(broken)
 
 
+def test_load_bad_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{not json")
+    with pytest.raises(FixtureError, match="JSON"):
+        Fixture.load(broken)
+
+
+def test_load_entry_files_not_a_list(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = "dedup.py"
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_entry_files_empty(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_missing_entry_file(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = ["nope.py"]
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="nope.py"):
+        Fixture.load(broken)
+
+
+def test_load_tests_dir_without_py_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_public").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_public"):
+        Fixture.load(broken)
+
+
 # ---------- Separation ----------
 
 def test_workspace_has_no_hidden_tests(fixture, tmp_path):
@@ -115,6 +162,18 @@ def test_reference_solves(fixture, tmp_path):
     assert result.verdict == "SOLVED"
 
 
+def test_verdict_unsolved_when_both_suites_are_all_errors(tmp_path):
+    """Un entry file che rompe l'import fa fallire (error) sia public sia hidden: 0/0 passati."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    (ws / fx.entry_files[0]).write_text("this is not valid python (((\n")
+    result = grade(fx, ws, tmp_path)
+    assert result.public_passed == 0
+    assert result.hidden_passed == 0
+    assert result.verdict == "UNSOLVED"
+    assert not result.solved
+
+
 # ---------- Tamper resistance ----------
 
 def test_agent_test_edits_do_not_reach_grading(tmp_path):
@@ -144,6 +203,28 @@ def test_prepare_refuses_existing_workspace(tmp_path):
     prepare_workspace(fx, tmp_path)
     with pytest.raises(FileExistsError):
         prepare_workspace(fx, tmp_path)
+
+
+def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
+    """Il seed della fixture può avere __pycache__ residuo (run locali): mai nel workspace."""
+    fx_root = tmp_path / "fx-pycache"
+    shutil.copytree(FX_DEDUP, fx_root)
+    pycache = fx_root / "seed" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "dedup.cpython-311.pyc").write_text("junk", encoding="utf-8")
+    fx = Fixture.load(fx_root)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    assert not (ws / "__pycache__").exists()
+
+
+def test_prepare_workspace_raises_when_seed_leaks_hidden_named_file(tmp_path):
+    """L'invariante è ricontrollata anche sul seed: un file 'test_hidden*' lì è un bug della fixture."""
+    fx_root = tmp_path / "fx-leaky"
+    shutil.copytree(FX_DEDUP, fx_root)
+    (fx_root / "seed" / "test_hidden_oops.py").write_text("# non dovrebbe stare nel seed\n")
+    fx = Fixture.load(fx_root)
+    with pytest.raises(RuntimeError, match="invariante violata"):
+        prepare_workspace(fx, tmp_path / "run")
 
 
 # ---------- Solver execution ----------

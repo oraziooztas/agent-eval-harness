@@ -7,7 +7,15 @@ import pytest
 
 from aeh.cli import main
 from aeh.fixture import Fixture
-from aeh.importer import AfbImportError, _prefixed_name, import_tasks
+from aeh.importer import (
+    AfbImportError,
+    _detect_entry_files,
+    _empty_like,
+    _prefixed_name,
+    _write_seed_stub,
+    import_tasks,
+    load_runnable_tasks,
+)
 
 TASK_ID = "afb-v0-042"
 
@@ -215,3 +223,107 @@ def test_prefixed_name_rules():
 def test_missing_afb_root_is_clean_error(tmp_path):
     with pytest.raises(AfbImportError, match="tasks"):
         import_tasks(tmp_path / "nowhere", tmp_path / "out")
+
+
+def test_load_runnable_tasks_bad_json(tmp_path):
+    tasks_dir = tmp_path / "afb" / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(AfbImportError, match="JSON valido"):
+        load_runnable_tasks(tmp_path / "afb")
+
+
+def test_load_runnable_tasks_not_a_list(tmp_path):
+    tasks_dir = tmp_path / "afb" / "tasks/v0"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(json.dumps({"id": "not-an-array"}), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="array di task"):
+        load_runnable_tasks(tmp_path / "afb")
+
+
+def test_import_tasks_none_runnable(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    tasks_path = afb / "tasks/v0/tasks.json"
+    tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+    for t in tasks:
+        t.pop("runnable_fixture", None)
+    tasks_path.write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="nessun task eseguibile"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_import_task_public_tests_missing(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    tasks_path = afb / "tasks/v0/tasks.json"
+    tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+    tasks[0]["runnable_fixture"]["public_tests"] = "agent_visible/nope"
+    tasks_path.write_text(json.dumps(tasks), encoding="utf-8")
+    with pytest.raises(AfbImportError, match="test pubblici non trovati"):
+        import_tasks(afb, tmp_path / "out")
+
+
+def test_import_task_prompt_falls_back_to_agent_prompt_without_task_md(tmp_path):
+    afb = _make_afb(tmp_path / "afb")
+    (afb / "fixtures/v0" / TASK_ID / "agent_visible" / "TASK.md").unlink()
+    out = tmp_path / "fixtures"
+    import_tasks(afb, out)
+    meta = json.loads((out / TASK_ID / "task.json").read_text(encoding="utf-8"))
+    assert meta["prompt"] == "Fix it (fallback prompt)."
+
+
+def test_import_task_raises_when_reference_matches_visible(tmp_path):
+    """Reference identica al materiale visibile: nessun entry file, importo inutile."""
+    afb = _make_afb(tmp_path / "afb")
+    reference = afb / "fixtures/v0" / TASK_ID / "reference_solution"
+    (reference / "src/mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (reference / "out.json").unlink()  # l'unico entry restante sarebbe questo artefatto
+    with pytest.raises(AfbImportError, match="nessun entry file rilevato"):
+        import_tasks(afb, tmp_path / "out")
+
+
+# ---------- _detect_entry_files / _write_seed_stub / _empty_like (unità) ----------
+
+def test_detect_entry_files_skips_nested_junk_and_test_dir(tmp_path):
+    visible = tmp_path / "visible"
+    reference = tmp_path / "reference"
+    (visible / "tests").mkdir(parents=True)
+    (visible / "tests/test_x.py").write_text("x", encoding="utf-8")
+    (reference / "tests").mkdir(parents=True)
+    (reference / "tests/test_x.py").write_text("x", encoding="utf-8")  # stesso nome dir dei test
+    (reference / "TASK.md").write_text("ignorami", encoding="utf-8")  # mai un entry file
+    junk = reference / "sub/.git"
+    junk.mkdir(parents=True)
+    (junk / "config").write_text("junk annidato", encoding="utf-8")  # dentro dir .git, non top-level
+    (reference / "src.py").write_text("changed", encoding="utf-8")
+    (visible / "src.py").write_text("original", encoding="utf-8")
+
+    entries, only_in_reference = _detect_entry_files(visible, reference, "tests")
+
+    assert entries == ["src.py"]
+    assert only_in_reference == []
+
+
+def test_write_seed_stub_falls_back_to_empty_file_on_invalid_json(tmp_path):
+    seed_dir = tmp_path / "seed"
+    ref_file = tmp_path / "artifact.json"
+    ref_file.write_text("{not valid json", encoding="utf-8")
+    _write_seed_stub(seed_dir, "artifact.json", ref_file)
+    assert (seed_dir / "artifact.json").read_text(encoding="utf-8") == ""
+
+
+def test_write_seed_stub_falls_back_to_empty_file_for_non_dict_json(tmp_path):
+    seed_dir = tmp_path / "seed"
+    ref_file = tmp_path / "artifact.json"
+    ref_file.write_text("[1, 2, 3]", encoding="utf-8")
+    _write_seed_stub(seed_dir, "artifact.json", ref_file)
+    assert (seed_dir / "artifact.json").read_text(encoding="utf-8") == ""
+
+
+def test_empty_like_covers_every_json_type():
+    assert _empty_like(True) is False
+    assert _empty_like("text") == ""
+    assert _empty_like(42) == 0
+    assert _empty_like(3.14) == 0
+    assert _empty_like([1, 2]) == []
+    assert _empty_like({"k": "v"}) == {}
+    assert _empty_like(None) is None

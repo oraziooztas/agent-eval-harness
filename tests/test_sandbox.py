@@ -123,6 +123,17 @@ def test_grading_records_sandbox(tmp_path):
         assert result.grading_sandbox in {backend, f"fallback-off:{backend}"}
 
 
+def test_grading_sandbox_unavailable_without_backend(tmp_path, monkeypatch):
+    """Host senza alcun backend sandbox: net_sandbox resta richiesto (default)
+    ma lo stato onesto registrato è 'unavailable', non un fallimento silente.
+    Forzato via monkeypatch perché dipende dall'host che esegue la CI."""
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    result = grade(fx, ws, tmp_path)
+    assert result.grading_sandbox == "unavailable"
+
+
 def test_grading_sandbox_disabled(tmp_path):
     fx = Fixture.load(FX_DEDUP)
     ws = prepare_workspace(fx, tmp_path)

@@ -1,5 +1,15 @@
 # DEVLOG — agent-eval-harness
 
+## 2026-10-12 — Le 11 PR della routine erano lo stesso lavoro rifatto ogni lunedì
+
+- La routine di manutenzione (lunedì 08:00, solo draft PR) ha aperto una PR a settimana dal 03/08: **#2-#12, nessuna mergiata**. Ogni lunedì ripartiva da `main` al 95% e richiudeva gli stessi buchi. Misurato applicando ogni branch da solo su `main`: **6 PR su 11 arrivano allo stesso 99,85%** (08-10, 08-17, 08-24, 09-07, 09-21, 09-28); le altre stanno fra 94,8% e 99,6%.
+- **Consolidato in un branch solo.** Base `maint/2026-09-28` (#10): i suoi test più il fix di `__version__`, che era `"0.1.0"` con il pacchetto a 0.3.0 (ora viene da `importlib.metadata` e l'importer usa quello).
+- Da #2 entra l'unico pezzo senza equivalente: la grading dir copiava il seed **senza** la regola d'igiene del workspace, quindi un `__pycache__` residuo finiva nel grading. Test rosso su `main` prima del fix, verde dopo.
+- I test che per nome sembrano unici in #2 e #12 hanno già un gemello in #10 (rerun nella stessa run dir, leak dal seed, oserror senza backend, JSON malformato): non portati, sarebbero doppioni.
+- Non toccata la separazione hidden/public: `find_hidden_leaks` cerca `test_hidden*` ricorsivamente, quindi copre anche un `.pyc` compilato in una sottocartella.
+- Verifica: **103 test**, coverage **99,85%** (scoperta solo `cli.py:208`, il `__main__`), ruff pulito, 4/4 fixture VALID, verde su 3.11 e 3.12.
+- La routine ora controlla le PR `maint/*` aperte prima di lavorare: se ce n'è una, si ferma. Senza questa guardia avrebbe aperto la #13 lunedì 19/10.
+
 ## 2026-08-01 — la policy metriche del 25/07 entra nel codice (era rimasta solo qui)
 
 - Bersaglio AFK "binario carriera". Il finding del 01/08 mattina era: *il public pass rate esce ancora in testa al summary (`cli.py:131`) contro la policy del DEVLOG 25/07, e il floor noop 58.3pp non è né in `src/` né in `docs/`*. Verificato a fonte primaria: entrambi veri, `grep "58.3"` su `src/ docs/ README.md tests/` = **zero occorrenze**. Regola scritta una volta in un log, codice che per una settimana ha riportato l'opposto — stesso pattern di MISTAKES 26/07 ("una regola in avanti non bonifica l'arretrato").

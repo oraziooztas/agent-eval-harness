@@ -217,6 +217,24 @@ def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
     assert not (ws / "__pycache__").exists()
 
 
+def test_grading_dir_skips_stale_pycache_like_workspace_does(tmp_path):
+    """Il grading copia il seed con la stessa regola d'igiene del workspace.
+
+    Regressione reale: un __pycache__ residuo nel seed (comune dopo un run
+    locale) veniva escluso dal workspace ma copiato pari pari nella grading
+    dir, rompendo l'invarianza "stessa base pristina" fra le due copie.
+    """
+    fx_root = tmp_path / "fx-pycache-grading"
+    shutil.copytree(FX_DEDUP, fx_root)
+    pycache = fx_root / "seed" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "stale.pyc").write_text("junk", encoding="utf-8")
+    fx = Fixture.load(fx_root)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    grade(fx, ws, tmp_path / "run")
+    assert not (tmp_path / "run" / "grading" / "__pycache__").exists()
+
+
 def test_prepare_workspace_raises_when_seed_leaks_hidden_named_file(tmp_path):
     """L'invariante è ricontrollata anche sul seed: un file 'test_hidden*' lì è un bug della fixture."""
     fx_root = tmp_path / "fx-leaky"

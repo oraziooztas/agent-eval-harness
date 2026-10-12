@@ -7,6 +7,7 @@
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from aeh.report import write_results, write_run_card
 from aeh.runner import (
     apply_reference_solver,
     find_hidden_leaks,
+    load_usage,
     prepare_workspace,
     run_solver,
 )
@@ -68,6 +70,41 @@ def test_load_missing_meta_field(tmp_path):
     del meta["prompt"]
     (broken / "task.json").write_text(json.dumps(meta))
     with pytest.raises(FixtureError, match="prompt"):
+        Fixture.load(broken)
+
+
+def test_load_malformed_json(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "task.json").write_text("{not json")
+    with pytest.raises(FixtureError, match="JSON valido"):
+        Fixture.load(broken)
+
+
+def test_load_empty_entry_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    meta = json.loads((broken / "task.json").read_text())
+    meta["entry_files"] = []
+    (broken / "task.json").write_text(json.dumps(meta))
+    with pytest.raises(FixtureError, match="entry_files"):
+        Fixture.load(broken)
+
+
+def test_load_entry_file_missing_in_reference(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "reference" / "dedup.py").unlink()
+    with pytest.raises(FixtureError, match="mancante in reference"):
+        Fixture.load(broken)
+
+
+def test_load_tests_dir_without_py_files(tmp_path):
+    broken = tmp_path / "broken"
+    shutil.copytree(FX_DEDUP, broken)
+    for f in (broken / "tests_public").glob("*.py"):
+        f.unlink()
+    with pytest.raises(FixtureError, match="tests_public.*non contiene"):
         Fixture.load(broken)
 
 
@@ -146,6 +183,18 @@ def test_prepare_refuses_existing_workspace(tmp_path):
         prepare_workspace(fx, tmp_path)
 
 
+def test_prepare_workspace_rejects_hidden_leak_from_seed(tmp_path):
+    """La guardia anti-leak non si fida nemmeno della fixture: se il seed stesso
+    contenesse un file con nome da hidden test, prepare_workspace deve bloccarsi
+    invece di consegnarlo all'agente. Invariante core, prima non testata."""
+    broken = tmp_path / "fx-leaky"
+    shutil.copytree(FX_DEDUP, broken)
+    (broken / "seed" / "test_hidden_leak.py").write_text("# non dovrebbe mai arrivare qui\n")
+    fx = Fixture.load(broken)
+    with pytest.raises(RuntimeError, match="invariante violata"):
+        prepare_workspace(fx, tmp_path / "run")
+
+
 # ---------- Solver execution ----------
 
 def test_solver_transcript_and_status(tmp_path):
@@ -172,6 +221,55 @@ def test_solver_timeout(tmp_path):
     res = run_solver(ws, "sleep 5", 1, tmp_path / "transcript.txt")
     assert res.status == "timeout"
     assert res.returncode is None
+
+
+def test_grade_unsolved_when_entry_file_broken(tmp_path):
+    """Verdetto UNSOLVED (distinto da PARTIAL): né public né hidden passano."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    (ws / "dedup.py").write_text("raise RuntimeError('entry file rotto')\n")
+    result = grade(fx, ws, tmp_path)
+    assert result.public_passed == 0
+    assert result.hidden_passed == 0
+    assert result.verdict == "UNSOLVED"
+    assert not result.solved
+
+
+def test_grade_can_rerun_into_same_run_dir(tmp_path):
+    """Un secondo grade() sullo stesso run_dir ricrea grading/ invece di fallire."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    first = grade(fx, ws, tmp_path)
+    second = grade(fx, ws, tmp_path)
+    assert second.public_passed == first.public_passed
+    assert second.hidden_passed == first.hidden_passed
+
+
+def test_grade_reraises_oserror_without_sandbox(tmp_path, monkeypatch):
+    """Senza backend da incolpare, un exec fallita deve propagare, non sparire."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+
+    def boom(*args, **kwargs):
+        raise OSError("python3 non eseguibile")
+
+    monkeypatch.setattr("aeh.grader.subprocess.run", boom)
+    with pytest.raises(OSError):
+        grade(fx, ws, tmp_path, net_sandbox=False)
+
+
+def test_grade_raises_when_test_runner_produces_no_results(tmp_path, monkeypatch):
+    """Il test runner può morire prima di scrivere l'output: il grading deve
+    fallire rumorosamente (RuntimeError) invece di restituire un esito vuoto."""
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+
+    def crash(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="crash")
+
+    monkeypatch.setattr("aeh.grader.subprocess.run", crash)
+    with pytest.raises(RuntimeError, match="test runner non ha prodotto risultati"):
+        grade(fx, ws, tmp_path, net_sandbox=False)
 
 
 def test_shell_solver_can_solve(tmp_path):
@@ -202,3 +300,25 @@ def test_results_and_run_card(tmp_path):
     assert "SOLVED" in text
     assert "mai visti dall'agente" in text
     assert fx.hidden_sha256()[:16] in text
+
+
+def test_load_usage_rejects_non_object_json(tmp_path):
+    """Un usage file che è JSON valido ma non un oggetto diventa un errore
+    leggibile invece di un TypeError che scoppia più avanti nel report."""
+    usage_file = tmp_path / "usage.json"
+    usage_file.write_text("[1, 2, 3]")
+    usage = load_usage(usage_file)
+    assert usage["source"] == "solver-reported"
+    assert "non è un oggetto" in usage["error"]
+
+
+def test_run_card_shows_usage_error(tmp_path):
+    fx = Fixture.load(FX_DEDUP)
+    ws = prepare_workspace(fx, tmp_path)
+    apply_reference_solver(fx, ws)
+    result = grade(fx, ws, tmp_path)
+    bad_usage = {"error": "usage file non parsabile: boom", "source": "solver-reported"}
+    write_results(tmp_path, fx, "builtin:ref", None, result, bad_usage)
+    card = write_run_card(tmp_path)
+    assert "⚠️" in card.read_text()
+    assert "boom" in card.read_text()

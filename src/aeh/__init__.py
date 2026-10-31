@@ -8,6 +8,8 @@ Invariants the harness enforces:
 3. Results record the SHA-256 of the hidden test set, proving which checks graded the run.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from aeh.fixture import Fixture, FixtureError
 from aeh.grader import GradeResult, grade
 from aeh.runner import SolverResult, prepare_workspace, run_solver
@@ -22,4 +24,7 @@ __all__ = [
     "run_solver",
 ]
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("agent-eval-harness")
+except PackageNotFoundError:  # pragma: no cover - solo fuori da un install
+    __version__ = "dev"

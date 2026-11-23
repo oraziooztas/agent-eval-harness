@@ -217,6 +217,26 @@ def test_prepare_workspace_skips_pycache_in_seed(tmp_path):
     assert not (ws / "__pycache__").exists()
 
 
+def test_prepare_workspace_skips_pycache_nested_in_seed_subdir(tmp_path):
+    """Lo stesso __pycache__ residuo, ma annidato in una sottocartella del seed
+
+    (layout comune nelle fixture AFB importate, es. ``seed/src/metrics.py``):
+    la regola d'igiene valeva solo per il top-level, non per i sottoalberi
+    copiati con ``shutil.copytree``.
+    """
+    fx_root = tmp_path / "fx-pycache-nested"
+    shutil.copytree(FX_DEDUP, fx_root)
+    pkg = fx_root / "seed" / "pkg"
+    pkg.mkdir()
+    (pkg / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    pycache = pkg / "__pycache__"
+    pycache.mkdir()
+    (pycache / "mod.cpython-311.pyc").write_text("junk", encoding="utf-8")
+    fx = Fixture.load(fx_root)
+    ws = prepare_workspace(fx, tmp_path / "run")
+    assert not (ws / "pkg" / "__pycache__").exists()
+
+
 def test_grading_dir_skips_stale_pycache_like_workspace_does(tmp_path):
     """Il grading copia il seed con la stessa regola d'igiene del workspace.
 

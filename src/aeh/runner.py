@@ -189,6 +189,6 @@ def _copy_tree_contents(src: Path, dst: Path) -> None:
         if item.name.startswith("__pycache__"):
             continue
         if item.is_dir():
-            shutil.copytree(item, dst / item.name)
+            shutil.copytree(item, dst / item.name, ignore=shutil.ignore_patterns("__pycache__"))
         else:
             shutil.copy2(item, dst / item.name)
